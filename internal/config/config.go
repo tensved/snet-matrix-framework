@@ -3,7 +3,7 @@ package config
 import (
 	"github.com/caarlos0/env/v10"
 	"github.com/joho/godotenv"
-	"log"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -15,11 +15,16 @@ var (
 )
 
 type PostgresConfig struct {
-	URL string `env:"DB_URL" envDefault:"postgresql://postgres:postgres@localhost:5432/postgres"`
+	User     string `env:"DB_USER"`
+	Password string `env:"DB_PASSWORD"`
+	Host     string `env:"DB_HOST"`
+	Port     string `env:"DB_PORT"`
+	Name     string `env:"DB_NAME"`
 }
 
 type AppConfig struct {
-	Port         string `env:"PORT" envDefault:"3000"`
+	Port         string `env:"APP_PORT"`
+	Domain       string `env:"DOMAIN"`
 	IsProduction bool   `env:"PRODUCTION"`
 }
 
@@ -29,42 +34,44 @@ type IPFSConfig struct {
 }
 
 type BlockchainConfig struct {
-	PrivateKey     string `env:"PRIVATE_KEY"`
-	EthProviderURL string `env:"ETH_PROVIDER_URL"`
-	ChainID        string `env:"CHAIN_ID"`
+	AdminPrivateKey    string `env:"ADMIN_PRIVATE_KEY"`
+	AdminPublicAddress string `env:"ADMIN_PUBLIC_ADDRESS"`
+	EthProviderURL     string `env:"ETH_PROVIDER_URL"`
+	EthProviderWSURL   string `env:"ETH_PROVIDER_WS_URL"`
+	ChainID            string `env:"CHAIN_ID"`
+	TokenAddress       string `env:"TOKEN_ADDRESS"`
 }
 
 type MatrixConfig struct {
-	HomeserverURL string `env:"HOMESERVER_URL"`
-	Servername    string `env:"SERVERNAME"`
-	Username      string `env:"BOT_USERNAME"`
-	Password      string `env:"BOT_PASSWORD"`
+	HomeserverURL string `env:"MATRIX_HOMESERVER_URL"`
+	Servername    string `env:"MATRIX_SERVERNAME"`
+	Username      string `env:"MATRIX_BOT_USERNAME"`
+	Password      string `env:"MATRIX_BOT_PASSWORD"`
 }
 
 func Init() {
 	if err := godotenv.Load(); err != nil {
-		log.Printf("Error loading .env file: %v", err)
+		log.Debug().Msgf("Error loading .env file: %v", err)
+	} else {
+		log.Debug().Msg(".env file loaded successfully")
 	}
 	if err := env.Parse(&App); err != nil {
-		log.Printf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err)
 	}
-	log.Printf("%+v\n", App)
 
 	if err := env.Parse(&Postgres); err != nil {
-		log.Printf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err)
 	}
 
 	if err := env.Parse(&Matrix); err != nil {
-		log.Printf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err)
 	}
 
 	if err := env.Parse(&Blockchain); err != nil {
-		log.Printf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err)
 	}
 
-	log.Printf("%+v\n", Blockchain)
-
 	if err := env.Parse(&IPFS); err != nil {
-		log.Printf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err)
 	}
 }

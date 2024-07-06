@@ -3,10 +3,14 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+	"math/big"
 	"matrix-ai-framework/internal/config"
+	"strings"
 	"time"
 )
 
@@ -16,8 +20,8 @@ type postgres struct {
 
 // New initializes a new postgres connection.
 func New() Service {
-
-	pool, err := pgxpool.New(context.Background(), config.Postgres.URL)
+	dbURL := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", config.Postgres.User, config.Postgres.Password, config.Postgres.Host, config.Postgres.Port, config.Postgres.Name)
+	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to connect to postgres")
 	}
@@ -51,7 +55,7 @@ func New() Service {
 			group_id 				TEXT NOT NULL UNIQUE,
 			group_name            	TEXT NOT NULL DEFAULT '',
 			payment_address 		TEXT NOT NULL DEFAULT '',
-			payment_expiration_threshold INTEGER NOT NULL DEFAULT 0,
+			payment_expiration_threshold BIGINT NOT NULL DEFAULT 0,
 			created_at          TIMESTAMP NOT NULL DEFAULT current_timestamp,
 			updated_at          TIMESTAMP NOT NULL DEFAULT current_timestamp,
 			deleted_at          TIMESTAMP DEFAULT null
@@ -80,6 +84,23 @@ func New() Service {
 			updated_at          		TIMESTAMP NOT NULL DEFAULT current_timestamp,
 			deleted_at          		TIMESTAMP DEFAULT null
 		);
+
+	CREATE TABLE IF NOT EXISTS payment_states
+			(
+				id                  		UUID PRIMARY KEY,
+				url 						TEXT,
+				status 						TEXT DEFAULT 'pending',
+				key 						TEXT,
+				tx_hash 					TEXT DEFAULT NULL,
+				token_address 				TEXT NOT NULL,
+				to_address 					TEXT NOT NULL,
+				amount 						INTEGER NOT NULL DEFAULT 0,
+				created_at         			TIMESTAMP NOT NULL DEFAULT current_timestamp,
+				updated_at          		TIMESTAMP NOT NULL DEFAULT current_timestamp,
+				expires_at          		TIMESTAMP NOT NULL DEFAULT current_timestamp + interval '10 minutes'
+			);
+
+	CREATE EXTENSION IF NOT EXISTS pgcrypto;
 `)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create tables")
@@ -182,24 +203,20 @@ func (p *postgres) CreateSnetOrgGroups(orgID int, groups []SnetOrgGroup) (err er
 	for _, group := range groups {
 		_, err = tx.Exec(ctx, stmt, orgID, group.GroupID, group.GroupName, group.PaymentAddress, group.PaymentExpirationThreshold)
 		if err != nil {
-			log.Error().Err(err)
+			log.Error().Err(err).Msg("Can't add snet org group")
 			return err
 		}
 	}
 
-	err = tx.Commit(ctx)
-	if err != nil {
-		return
-	}
-
-	return
+	return tx.Commit(ctx)
 }
 
 // GetSnetOrgGroup retrieves a snet organization group
 func (p *postgres) GetSnetOrgGroup(groupID string) (g SnetOrgGroup, err error) {
 
 	row := p.Pool.QueryRow(context.Background(), "SELECT * FROM snet_org_groups WHERE group_id=$1 AND deleted_at is NULL", groupID)
-	err = row.Scan(&g.ID, &g.OrgID, &g.GroupID, &g.GroupName, &g.PaymentAddress, &g.PaymentExpirationThreshold, &g.CreatedAt, &g.UpdatedAt, &g.DeletedAt)
+	var paymentExpirationThreshold int64
+	err = row.Scan(&g.ID, &g.OrgID, &g.GroupID, &g.GroupName, &g.PaymentAddress, &paymentExpirationThreshold, &g.CreatedAt, &g.UpdatedAt, &g.DeletedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Error().Err(err).Msg("No org group found with given ID")
@@ -208,7 +225,11 @@ func (p *postgres) GetSnetOrgGroup(groupID string) (g SnetOrgGroup, err error) {
 		log.Error().Err(err).Msg("Failed to retrieve org group")
 		return
 	}
-	log.Debug().Msgf("Retrieved org group: %v", g)
+
+	// Convert int64 to *big.Int
+	g.PaymentExpirationThreshold = big.NewInt(paymentExpirationThreshold)
+
+	log.Debug().Msgf("Retrieved org group: %+v", g)
 	return
 }
 
@@ -252,6 +273,87 @@ func (p *postgres) GetSnetService(snetID string) (s SnetService, err error) {
 		log.Error().Err(err).Msg("Failed to retrieve snet service")
 		return
 	}
-	log.Debug().Msgf("Retrieved snet service: %v", s)
+	log.Debug().Msgf("Retrieved snet service: %+v", s)
+	return
+}
+
+// CreatePaymentState creates a payment state
+func (p *postgres) CreatePaymentState(ps *PaymentState) (id uuid.UUID, err error) {
+	query := `INSERT INTO payment_states (id, url, key, token_address, to_address, amount) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+	row := p.Pool.QueryRow(context.Background(), query, ps.ID, ps.URL, ps.Key, ps.TokenAddress, ps.ToAddress, ps.Amount)
+	err = row.Scan(&id)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create payment")
+	}
+	return
+}
+
+// GetPaymentStateByKey retrieves a payment state
+func (p *postgres) GetPaymentStateByKey(key string) (ps *PaymentState, err error) {
+	query := `SELECT * FROM payment_states WHERE key = $1 AND status != 'paid'`
+	row := p.Pool.QueryRow(context.Background(), query, key)
+	ps = &PaymentState{}
+	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &ps.Amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Error().Err(err).Msgf("No payment state found with key %s", key)
+			return
+		}
+		log.Error().Err(err).Msg("Failed to retrieve payment state")
+		return
+	}
+	log.Debug().Msgf("Retrieved payment state: %+v", ps)
+	return
+}
+
+// GetPaymentState retrieves a payment state
+func (p *postgres) GetPaymentState(id uuid.UUID) (ps *PaymentState, err error) {
+	query := `SELECT * FROM payment_states WHERE id = $1 AND status != 'paid'`
+	row := p.Pool.QueryRow(context.Background(), query, id)
+	ps = &PaymentState{}
+	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &ps.Amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Error().Err(err).Msgf("No payment state found with id %s", id)
+			return
+		}
+		log.Error().Err(err).Msg("Failed to retrieve payment state")
+		return
+	}
+	log.Debug().Msgf("Retrieved payment state: %+v", ps)
+	return
+}
+
+// PatchUpdatePaymentState updates only the specified fields of a payment state
+func (p *postgres) PatchUpdatePaymentState(ps *PaymentState) (err error) {
+	query := "UPDATE payment_states SET updated_at = NOW(), "
+	updates := []string{}
+	params := []any{}
+	paramID := 1
+
+	if ps.Status != "" {
+		updates = append(updates, fmt.Sprintf("status = $%d", paramID))
+		params = append(params, ps.Status)
+		paramID++
+	}
+	if ps.TxHash != nil {
+		updates = append(updates, fmt.Sprintf("tx_hash = $%d", paramID))
+		params = append(params, ps.TxHash)
+		paramID++
+	}
+
+	if len(updates) == 0 {
+		log.Error().Msg("No fields provided for update")
+		return fmt.Errorf("no fields provided for update")
+	}
+
+	query += strings.Join(updates, ", ") + fmt.Sprintf(" WHERE id = $%d", paramID)
+	params = append(params, ps.ID)
+
+	_, err = p.Pool.Exec(context.Background(), query, params...)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to execute update")
+	}
+
 	return
 }

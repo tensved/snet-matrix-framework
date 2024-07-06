@@ -2,7 +2,6 @@ package blockchain
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rs/zerolog/log"
@@ -82,6 +81,7 @@ type EthereumService interface {
 
 type Ethereum struct {
 	Client     *ethclient.Client
+	WSSClient  *ethclient.Client
 	Registry   *Registry
 	MPE        *MultiPartyEscrow
 	MPEAddress common.Address
@@ -92,15 +92,19 @@ func Init() (e Ethereum) {
 	log.Debug().Any("ETH_URL", config.Blockchain.EthProviderURL).Msg("ETH_URL")
 	e.Client, err = ethclient.Dial(config.Blockchain.EthProviderURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to blockchain")
+		log.Fatal().Err(err).Msg("Failed to connect to blockchain via HTTPS")
+	}
+	e.WSSClient, err = ethclient.Dial(config.Blockchain.EthProviderWSURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to blockchain via WSS")
 	}
 	err = e.InitRegistry()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to InitRegistry")
+		log.Fatal().Err(err).Msg("Failed to init registry")
 	}
 	err = e.InitMPE()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to InitMPE")
+		log.Fatal().Err(err).Msg("Failed to init MPE")
 	}
 	return e
 }
@@ -135,13 +139,13 @@ func (eth *Ethereum) InitMPE() (err error) {
 		return
 	}
 	address := n[config.Blockchain.ChainID].Address
-	fmt.Println(address)
 	log.Debug().Msgf("MPE address: %s", address)
-	eth.MPE, err = NewMultiPartyEscrow(common.HexToAddress(address), eth.Client)
+	eth.MPE, err = NewMultiPartyEscrow(common.HexToAddress(address), eth.WSSClient)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to init MPE")
 	}
 	eth.MPEAddress = common.HexToAddress(address)
+
 	return
 }
 

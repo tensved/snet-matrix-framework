@@ -1,7 +1,10 @@
 // Package lib provides functionality for managing AI services.
 package lib
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/rs/zerolog/log"
+)
 
 // AIService represents an AI service.
 type AIService struct {
@@ -33,7 +36,7 @@ func (s *AIService) CallMethod(methodName string, data map[string]interface{}) (
 	// marshalData to input
 
 	if err := method.CheckData(data); err != nil {
-		fmt.Println(err)
+		log.Error().Err(err).Msg("Failed to check data")
 		return nil, fmt.Errorf("invalid data")
 	}
 

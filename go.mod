@@ -6,7 +6,7 @@ require (
 	github.com/bufbuild/protocompile v0.13.0
 	github.com/caarlos0/env/v10 v10.0.0
 	github.com/ethereum/go-ethereum v1.14.0
-	github.com/gofiber/fiber/v3 v3.0.0-20240322111812-5e8df0a348be
+	github.com/gofiber/fiber/v2 v2.52.4
 	github.com/golang/protobuf v1.5.4
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.1
@@ -15,7 +15,6 @@ require (
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.32.0
-	github.com/sethvargo/go-password v0.2.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/singnet/snet-ecosystem-contracts v0.0.10
 	golang.org/x/net v0.24.0
@@ -46,7 +45,6 @@ require (
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/gofiber/utils/v2 v2.0.0-beta.3 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -91,6 +89,7 @@ require (
 	github.com/libp2p/go-netroute v0.2.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/miekg/dns v1.1.58 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
@@ -114,6 +113,7 @@ require (
 	github.com/prometheus/client_model v0.6.0 // indirect
 	github.com/prometheus/common v0.51.0 // indirect
 	github.com/prometheus/procfs v0.13.0 // indirect
+	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rs/cors v1.7.0 // indirect
 	github.com/samber/lo v1.39.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect

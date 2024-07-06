@@ -9,7 +9,8 @@ func main() {
 
 	snetEngine := lib.DefaultSNETEngine()
 
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// start engine
 	if err := snetEngine.Run(ctx); err != nil {

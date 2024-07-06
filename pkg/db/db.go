@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/google/uuid"
 	"math/big"
 	"time"
 )
@@ -13,6 +14,10 @@ type Service interface {
 	CreateSnetOrg(organization SnetOrganization) (id int, err error)
 	CreateSnetOrgGroups(orgID int, groups []SnetOrgGroup) (err error)
 	GetSnetOrgGroup(groupID string) (SnetOrgGroup, error)
+	CreatePaymentState(paymentState *PaymentState) (id uuid.UUID, err error)
+	GetPaymentState(id uuid.UUID) (ps *PaymentState, err error)
+	GetPaymentStateByKey(key string) (ps *PaymentState, err error)
+	PatchUpdatePaymentState(ps *PaymentState) (err error)
 	Health() map[string]string
 }
 
@@ -64,4 +69,19 @@ type SnetOrgGroup struct {
 	CreatedAt                  time.Time  `db:"created_at"` // not null
 	UpdatedAt                  time.Time  `db:"updated_at"` // not null
 	DeletedAt                  *time.Time `db:"deleted_at"` // can be null
+}
+
+// PaymentState represents the state of a user interacting with the bot for payments
+type PaymentState struct {
+	ID           uuid.UUID `json:"id" db:"id"`   // UUID of payment
+	URL          string    `json:"url" db:"url"` // URl for transaction request
+	Key          string    `json:"key" db:"key"` // key: "{roomId} {userId} {serviceName} {methodName}"
+	TxHash       *string   `json:"txHash" db:"tx_hash"`
+	TokenAddress string    `json:"tokenAddress" db:"token_address"`
+	ToAddress    string    `json:"toAddress" db:"to_address"`
+	Amount       int       `json:"amount" db:"amount"`
+	Status       string    `json:"status" db:"status"` // status of payment – pending, expired or paid
+	CreatedAt    time.Time `json:"createdAt" db:"created_at"`
+	UpdatedAt    time.Time `json:"updatedAt" db:"updated_at"`
+	ExpiresAt    time.Time `json:"expiresAt" db:"expires_at"`
 }

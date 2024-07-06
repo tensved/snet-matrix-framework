@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v2"
 	"matrix-ai-framework/pkg/db"
 )
 
