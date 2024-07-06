@@ -22,8 +22,13 @@
 # Go workspace file
 go.work
 
-# proto
-*.proto
-
 # go-generate
 pkg/blockchain/registry_and_mpe.go
+
+# certs
+certbot
+
+.DS_Store
+
+# frontend env
+frontend/.env.local

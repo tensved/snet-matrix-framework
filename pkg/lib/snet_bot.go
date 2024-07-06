@@ -1,9 +1,17 @@
 package lib
 
 import (
+	"context"
 	"fmt"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"matrix-ai-framework/internal/config"
 	"matrix-ai-framework/internal/matrix"
+	"matrix-ai-framework/pkg/blockchain"
+	"matrix-ai-framework/pkg/db"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 	"strings"
@@ -12,8 +20,8 @@ import (
 
 var _ MatrixBot = (*SNETBot)(nil)
 
-// UserState represents the state of a user interacting with the bot for sequential input filling
-type UserState struct {
+// CallState represents the state of a user interacting with the bot for sequential input filling
+type CallState struct {
 	ServiceName    string         // name of the called service
 	Method         *AIMethod      // method that the user wants to call
 	CurrentInputID int            // current input
@@ -21,9 +29,9 @@ type UserState struct {
 	FilledInputs   map[string]any // inputs, that have been filled
 }
 
-// NewUserState creates a new UserState instance
-func NewUserState(serviceName string, method *AIMethod, eventID id.EventID) *UserState {
-	return &UserState{
+// NewCallState creates a new CallState instance
+func NewCallState(serviceName string, method *AIMethod, eventID id.EventID) *CallState {
+	return &CallState{
 		ServiceName:    serviceName,
 		Method:         method,
 		CurrentInputID: 0,
@@ -35,15 +43,20 @@ func NewUserState(serviceName string, method *AIMethod, eventID id.EventID) *Use
 // SNETBot represents a Matrix bot for SNET Services
 // Implements IMauBot
 type SNETBot struct {
-	Client     matrix.Service
-	AIServices []BotService
-	States     map[string]*UserState // key: "{roomId} {userId}"
+	Client        matrix.Service
+	DB            db.Service
+	AIServices    []BotService
+	Eth           blockchain.Ethereum
+	CallStates    map[string]*CallState       // key: "{roomId} {userId}"
+	PaymentStates map[string]*db.PaymentState // key: "{roomId} {userId}"
 }
 
-func NewSNETBot(client matrix.Service) *SNETBot {
+func NewSNETBot(client matrix.Service, db db.Service, eth blockchain.Ethereum) *SNETBot {
 	return &SNETBot{
 		Client:     client,
-		States:     make(map[string]*UserState),
+		DB:         db,
+		Eth:        eth,
+		CallStates: make(map[string]*CallState),
 		AIServices: make([]BotService, 0),
 	}
 }
@@ -88,19 +101,130 @@ func (bot *SNETBot) refreshToken() {
 	}
 }
 
-// handlerEvent handles incoming events and user interactions
 func (bot *SNETBot) handlerEvent(event *event.Event) {
 	key := fmt.Sprintf("%s %s", event.RoomID, event.Sender)
-
-	state, found := bot.States[key]
-	if !found {
-
+	_, callStateFound := bot.CallStates[key]
+	if !callStateFound {
 		names, err := bot.parseCommand(event.Content.AsMessage().Body, event.RoomID)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to parse command: " + err.Error())
+			log.Error().Err(err).Msg("Failed to parse command")
 			return
 		}
 
+		service := bot.GetService(names.ServiceName)
+		if service == nil {
+			log.Error().Msg("Service not found")
+			return
+		}
+		method := service.GetMethod(names.MethodName)
+		if method == nil {
+			log.Error().Msg("Method not found")
+			return
+		}
+		inputs := method.Inputs
+		if len(inputs) == 0 {
+			log.Error().Msg("No inputs")
+			return
+		}
+
+		paymentStateKey := fmt.Sprintf("%s %s %s %s", event.RoomID, event.Sender, names.ServiceName, names.MethodName)
+
+		paymentStateUUID := uuid.New()
+		recipientAddress := config.Blockchain.AdminPublicAddress
+
+		nameParts := strings.Split(names.ServiceName, "/")
+		s, err := bot.DB.GetSnetService(nameParts[0])
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to get snet service")
+		}
+		tokenAddress, err := bot.Eth.MPE.Token(&bind.CallOpts{})
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to get token address")
+		}
+		paymentStateURL := fmt.Sprintf("ethereum:%s/transfer?address=%s&uint256=%s",
+			tokenAddress, recipientAddress, s.Price)
+
+		paymentState := &db.PaymentState{
+			ID:           paymentStateUUID,
+			URL:          paymentStateURL,
+			Key:          paymentStateKey,
+			TokenAddress: tokenAddress.Hex(),
+			ToAddress:    recipientAddress,
+			Amount:       s.Price,
+		}
+		_, err = bot.DB.CreatePaymentState(paymentState)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create payment state")
+			return
+		}
+		paymentGatewayURL := fmt.Sprintf("%s?id=%s", fmt.Sprintf("https://%s", config.App.Domain), paymentStateUUID.String())
+		text := fmt.Sprintf("To continue, pay for the service at the link:<br>%s", paymentGatewayURL)
+
+		_, err = bot.Client.SendMessage(event.RoomID, text)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to send message")
+		}
+
+		go bot.waitForPayment(event, paymentStateUUID, names)
+	} else {
+		bot.processCallState(event, ParsedNames{})
+	}
+}
+
+func (bot *SNETBot) waitForPayment(event *event.Event, paymentID uuid.UUID, names ParsedNames) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			paymentState, err := bot.DB.GetPaymentState(paymentID)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to get payment state")
+				continue
+			}
+
+			txHash := paymentState.TxHash
+			if txHash == nil {
+				log.Error().Msg("TxHash not found in payment state")
+				continue
+			}
+
+			receipt, err := bot.Eth.Client.TransactionReceipt(context.Background(), common.HexToHash(*txHash))
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to get transaction receipt")
+				continue
+			}
+
+			if receipt.Status == types.ReceiptStatusSuccessful {
+				paymentState.Status = "paid"
+				err = bot.DB.PatchUpdatePaymentState(paymentState)
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to update payment state status")
+					continue
+				}
+
+				text := "Payment received. You can now proceed with the service."
+				_, err = bot.Client.SendMessage(event.RoomID, text)
+				if err != nil {
+					log.Error().Err(err).Msg("Failed to send message")
+					continue
+				}
+
+				bot.processCallState(event, names)
+				return
+			}
+		case <-time.After(10 * time.Minute):
+			log.Info().Msg("Timeout waiting for payment")
+			return
+		}
+	}
+}
+
+func (bot *SNETBot) processCallState(event *event.Event, names ParsedNames) {
+	key := fmt.Sprintf("%s %s", event.RoomID, event.Sender)
+	callState, callStateFound := bot.CallStates[key]
+	if !callStateFound {
 		service := bot.GetService(names.ServiceName)
 		if service == nil {
 			log.Error().Msg("Service not found")
@@ -123,12 +247,12 @@ func (bot *SNETBot) handlerEvent(event *event.Event) {
 
 		resp, err := bot.Client.SendMessage(event.RoomID, text)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to send message: " + err.Error())
+			log.Error().Err(err).Msg("Failed to send message")
 			return
 		}
 
-		state = NewUserState(names.ServiceName, method, resp.EventID)
-		bot.States[key] = state
+		callState = NewCallState(names.ServiceName, method, resp.EventID)
+		bot.CallStates[key] = callState
 
 		return
 	}
@@ -139,11 +263,11 @@ func (bot *SNETBot) handlerEvent(event *event.Event) {
 		return
 	}
 
-	if state.LastEventID != repliedEvt.ID {
+	if callState.LastEventID != repliedEvt.ID {
 		return
 	}
 
-	currentInput := state.Method.Inputs[state.CurrentInputID]
+	currentInput := callState.Method.Inputs[callState.CurrentInputID]
 
 	msg := event.Content.AsMessage()
 
@@ -153,51 +277,50 @@ func (bot *SNETBot) handlerEvent(event *event.Event) {
 		return
 	}
 
-	log.Info().Msgf("GET NEW MSG: %v", replyText)
+	log.Debug().Msgf("Got new message: %v", replyText)
 
-	state.FilledInputs[currentInput.Name] = replyText
+	callState.FilledInputs[currentInput.Name] = replyText
 
-	state.CurrentInputID++
+	callState.CurrentInputID++
 
-	if state.CurrentInputID >= len(state.Method.Inputs) {
+	if callState.CurrentInputID >= len(callState.Method.Inputs) {
+		log.Debug().Msgf("Full data filled: %v", callState.FilledInputs)
 
-		log.Info().Msg("Full data filled: " + fmt.Sprint(state.FilledInputs))
+		ctx := NewMContext(WithParams(callState.FilledInputs))
 
-		ctx := NewMContext(WithParams(state.FilledInputs))
+		go callState.Method.Handler.Call(ctx)
 
-		go state.Method.Handler.Call(ctx)
-
-		_, err := bot.Client.SendMessage(event.RoomID, "Wait for answer...")
+		_, err = bot.Client.SendMessage(event.RoomID, "Wait for answer...")
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to send message: " + err.Error())
+			log.Error().Err(err).Msg("Failed to send message")
 			return
 		}
 
-		delete(bot.States, key)
+		delete(bot.CallStates, key)
 
 		select {
 		case res := <-ctx.Result:
 			log.Debug().Msgf("Got res: %v", res)
-			_, err := bot.Client.SendMessage(event.RoomID, fmt.Sprintf("<code>%s</code>", res))
+			_, err = bot.Client.SendMessage(event.RoomID, fmt.Sprintf("<code>%s</code>", res))
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to send message: " + err.Error())
+				log.Error().Err(err).Msg("Failed to send message")
 			}
 
-		case <-time.After(5 * time.Second):
-			log.Info().Msg("Timeout!")
+		case <-time.After(2 * time.Minute):
+			log.Debug().Msg("Timeout!")
 		}
 
 		return
 	}
 
-	text := bot.getInputDescription(state.Method.Inputs[state.CurrentInputID])
+	text := bot.getInputDescription(callState.Method.Inputs[callState.CurrentInputID])
 	resp, err := bot.Client.SendMessage(event.RoomID, text)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to send message: " + err.Error())
+		log.Error().Err(err).Msg("Failed to send message")
 		return
 	}
 
-	state.LastEventID = resp.EventID
+	callState.LastEventID = resp.EventID
 }
 
 // ParsedNames contains parsed information from a command
@@ -215,7 +338,9 @@ func (bot *SNETBot) parseCommand(message string, roomID id.RoomID) (ParsedNames,
 		return ParsedNames{}, err
 	}
 
-	names := strings.Split(message, " ")
+	trimmedMessage := strings.TrimSpace(message)
+
+	names := strings.Split(trimmedMessage, " ")
 
 	if !isPrivate {
 		if len(names) != 3 {

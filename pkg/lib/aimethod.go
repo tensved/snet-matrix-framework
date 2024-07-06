@@ -52,7 +52,7 @@ type AIMethod struct {
 	Handler MHandler
 }
 
-func (m *AIMethod) CheckData(data map[string]interface{}) error {
+func (m *AIMethod) CheckData(data map[string]any) error {
 	for key, val := range data {
 		for _, input := range m.Inputs {
 			if input.Name == key {

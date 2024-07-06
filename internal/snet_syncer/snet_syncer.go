@@ -29,7 +29,7 @@ func New(eth blockchain.Ethereum, ipfs ipfs.IPFSClient, db db.Service) SnetSynce
 	}
 }
 
-func (s *SnetSyncer) syncOnce() {
+func (s *SnetSyncer) SyncOnce() {
 	log.Info().Msg("SnetSyncer now working...")
 
 	orgs, _ := s.Ethereum.GetOrgs()
@@ -114,14 +114,13 @@ func (s *SnetSyncer) syncOnce() {
 }
 
 func (s *SnetSyncer) Start() {
-	log.Info().Msg("SnetSyncer started")
-	s.syncOnce()
+	log.Info().Msg("SnetSyncer ticker started")
 	ticker := time.NewTicker(100 * time.Hour)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			s.syncOnce()
+			s.SyncOnce()
 		}
 	}
 }
@@ -143,81 +142,106 @@ func getFileDescriptor(protoContent, name string) (ds protoreflect.FileDescripto
 	return
 }
 
-func (s *SnetSyncer) GetSnetServicesInfo() string {
-	var builder strings.Builder
-	if s.FileDescriptors != nil {
-		builder.WriteString("<div style=\"line-height: 0.8;\"><ol>")
-		for snetID, descriptors := range s.FileDescriptors {
-			if descriptors != nil {
-				for _, descriptor := range descriptors {
-					if descriptor != nil {
-						builder.WriteString("<li><strong>Path: " + descriptor.Path() + " Snet ID: " + snetID + " Descriptor: " + string(descriptor.FullName().Name()) + "</strong></li>")
-						services := descriptor.Services()
-						if services != nil {
-							for i := 0; i < services.Len(); i++ {
-								if services.Get(i) != nil {
-									builder.WriteString("<p><em>Service: " + string(services.Get(i).FullName().Name()) + "</em></p>")
-									methods := services.Get(i).Methods()
-									if methods != nil {
-										builder.WriteString("<p>🔁Methods: </p><ul>")
-										for j := 0; j < methods.Len(); j++ {
-											if methods.Get(j) != nil {
-												builder.WriteString("<li>" + string(methods.Get(j).FullName().Name()) + "<br>")
-												inputFields := methods.Get(j).Input().Fields()
-												outputFields := methods.Get(j).Output().Fields()
-
-												if inputFields != nil {
-													builder.WriteString("<p>➡️Input:</p>")
-													builder.WriteString("<pre><code>{")
-													for n := 0; n < inputFields.Len(); n++ {
-														if inputFields.Get(n).Message() != nil {
-															messageFields := inputFields.Get(n).Message().Fields()
-															if messageFields != nil {
-																builder.WriteString("\n    \"" + inputFields.Get(n).JSONName() + "\": {")
-																for m := 0; m < messageFields.Len(); m++ {
-																	builder.WriteString("\n        \"" + messageFields.Get(m).JSONName() + "\": " + messageFields.Get(m).Kind().String())
-																}
-																builder.WriteString("\n    }")
-															}
-														} else {
-															builder.WriteString("\n    \"" + inputFields.Get(n).JSONName() + "\": " + inputFields.Get(n).Kind().String())
-														}
-													}
-													builder.WriteString("\n}</code></pre>")
-												}
-												if outputFields != nil {
-													builder.WriteString("<p>➡️Output:</p>")
-													builder.WriteString("<pre><code>{")
-													for n := 0; n < outputFields.Len(); n++ {
-														if outputFields.Get(n).Message() != nil {
-															messageFields := outputFields.Get(n).Message().Fields()
-															if messageFields != nil {
-																builder.WriteString("\n    \"" + outputFields.Get(n).JSONName() + "\": {")
-																for m := 0; m < messageFields.Len(); m++ {
-																	builder.WriteString("\n        \"" + messageFields.Get(m).JSONName() + "\": " + messageFields.Get(m).Kind().String())
-																}
-																builder.WriteString("\n    }")
-															}
-														} else {
-															builder.WriteString("\n    \"" + outputFields.Get(n).JSONName() + "\": " + outputFields.Get(n).Kind().String())
-														}
-													}
-													builder.WriteString("\n}</code></pre>")
-												}
-												builder.WriteString("</li>")
-											}
-										}
-										builder.WriteString("</ul>")
-									}
-								}
-							}
-						}
+func writeServiceSnetIDs(builder strings.Builder, fileDescriptors map[string][]protoreflect.FileDescriptor) strings.Builder {
+	builder.WriteString("<div style=\"line-height: 0.8;\"><ol>")
+	for snetID, descriptors := range fileDescriptors {
+		if descriptors != nil {
+			for _, descriptor := range descriptors {
+				if descriptor != nil {
+					builder.WriteString("<li><strong>Path: " + descriptor.Path() + " Snet ID: " + snetID + " Descriptor: " + string(descriptor.FullName().Name()) + "</strong></li>")
+					services := descriptor.Services()
+					if services != nil {
+						builder = writeServiceNames(builder, services)
 					}
 				}
 			}
 		}
-		builder.WriteString("</ol></div>")
+	}
+	builder.WriteString("</ol></div>")
+	return builder
+}
 
+func writeServiceNames(builder strings.Builder, services protoreflect.ServiceDescriptors) strings.Builder {
+	for i := 0; i < services.Len(); i++ {
+		if services.Get(i) != nil {
+			builder.WriteString("<p><em>Service: " + string(services.Get(i).FullName().Name()) + "</em></p>")
+			methods := services.Get(i).Methods()
+			if methods != nil {
+				builder = writeMethodNames(builder, methods)
+			}
+		}
+	}
+	return builder
+}
+
+func writeMethodNames(builder strings.Builder, methods protoreflect.MethodDescriptors) strings.Builder {
+	builder.WriteString("<p>🔁Methods: </p><ul>")
+	for j := 0; j < methods.Len(); j++ {
+		if methods.Get(j) != nil {
+			builder.WriteString("<li>" + string(methods.Get(j).FullName().Name()) + "<br>")
+			inputFields := methods.Get(j).Input().Fields()
+			outputFields := methods.Get(j).Output().Fields()
+
+			if inputFields != nil {
+				builder.WriteString("<p>➡️Input:</p>")
+				builder = writeFields(builder, inputFields)
+			}
+			if outputFields != nil {
+				builder.WriteString("<p>➡️Output:</p>")
+				builder = writeFields(builder, outputFields)
+			}
+			builder.WriteString("</li>")
+		}
+	}
+	builder.WriteString("</ul>")
+	return builder
+}
+
+func writeFields(builder strings.Builder, fields protoreflect.FieldDescriptors) strings.Builder {
+	builder.WriteString("<pre><code>{")
+	for n := 0; n < fields.Len(); n++ {
+		if fields.Get(n).Message() != nil {
+			messageFields := fields.Get(n).Message().Fields()
+			if messageFields != nil {
+				builder.WriteString("\n    \"" + fields.Get(n).JSONName() + "\": {")
+				for m := 0; m < messageFields.Len(); m++ {
+					builder.WriteString("\n        \"" + messageFields.Get(m).JSONName() + "\": " + messageFields.Get(m).Kind().String())
+				}
+				builder.WriteString("\n    }")
+			}
+		} else {
+			builder.WriteString("\n    \"" + fields.Get(n).JSONName() + "\": " + fields.Get(n).Kind().String())
+		}
+	}
+	builder.WriteString("\n}</code></pre>")
+	return builder
+}
+
+func writeOutputs(builder strings.Builder, inputFields protoreflect.FieldDescriptors) strings.Builder {
+	builder.WriteString("<p>➡️Input:</p>")
+	builder.WriteString("<pre><code>{")
+	for n := 0; n < inputFields.Len(); n++ {
+		if inputFields.Get(n).Message() != nil {
+			messageFields := inputFields.Get(n).Message().Fields()
+			if messageFields != nil {
+				builder.WriteString("\n    \"" + inputFields.Get(n).JSONName() + "\": {")
+				for m := 0; m < messageFields.Len(); m++ {
+					builder.WriteString("\n        \"" + messageFields.Get(m).JSONName() + "\": " + messageFields.Get(m).Kind().String())
+				}
+				builder.WriteString("\n    }")
+			}
+		} else {
+			builder.WriteString("\n    \"" + inputFields.Get(n).JSONName() + "\": " + inputFields.Get(n).Kind().String())
+		}
+	}
+	builder.WriteString("\n}</code></pre>")
+	return builder
+}
+
+func (s *SnetSyncer) GetSnetServicesInfo() string {
+	var builder strings.Builder
+	if s.FileDescriptors != nil {
+		builder = writeServiceSnetIDs(builder, s.FileDescriptors)
 	}
 
 	return builder.String()

@@ -83,10 +83,5 @@ func (s *GRPCService) CallMethod(method string, req, resp interface{}, md metada
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	ctx = metadata.NewOutgoingContext(ctx, md)
-	err := s.Conn.Invoke(ctx, method, req, resp)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return s.Conn.Invoke(ctx, method, req, resp)
 }

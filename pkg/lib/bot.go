@@ -105,7 +105,7 @@ func (b *DefaultMatrixBot) Run() error {
 		for {
 			err := b.MauClient.Sync()
 			if err != nil {
-				fmt.Println(err)
+				log.Error().Err(err).Msg("Failed to sync")
 				time.Sleep(5 * time.Second) // Wait before retrying
 			}
 		}

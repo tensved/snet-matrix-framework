@@ -141,7 +141,7 @@ func (s *service) StartListening(events chan *event.Event) (err error) {
 			events <- evt
 		}
 	})
-	// Start syncing in a separate goroutine
+
 	go func() {
 		for {
 			log.Info().Msg("Matrix events sync started")
@@ -184,26 +184,26 @@ func ExtractTexts(formattedBody string) (originalText, replyText string, err err
 		return "", "", err
 	}
 
-	var extract func(*html.Node, bool) // Добавляем флаг для определения, находимся ли мы внутри mx-reply
+	var extract func(*html.Node, bool)
 	extract = func(n *html.Node, insideMXReply bool) {
 		if n.Type == html.ElementNode && n.Data == "mx-reply" {
-			insideMXReply = true // Входим в mx-reply
+			insideMXReply = true
 		} else if n.Type == html.ElementNode && n.Data == "br" && insideMXReply {
-			originalText = "" // Сбрасываем originalText при встрече с <br> внутри mx-reply
+			originalText = ""
 		}
 
 		if n.Type == html.TextNode && insideMXReply {
-			originalText += n.Data // Добавляем текст, если мы внутри mx-reply
+			originalText += n.Data
 		} else if n.Type == html.TextNode && !insideMXReply {
-			replyText += n.Data // Добавляем текст, если мы не внутри mx-reply
+			replyText += n.Data
 		}
 
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			extract(c, insideMXReply) // Продолжаем с текущим состоянием insideMXReply
+			extract(c, insideMXReply)
 		}
 	}
 
-	extract(doc, false) // Начинаем с false, так как мы не внутри mx-reply изначально
+	extract(doc, false)
 	return strings.TrimSpace(originalText), strings.TrimSpace(replyText), nil
 }
 
@@ -227,8 +227,8 @@ func (s *service) UploadAudio(base64Audio string) (id.ContentURIString, error) {
 	uploadRequest := mautrix.ReqUploadMedia{
 		ContentBytes:  audioBytes,
 		ContentLength: int64(len(audioBytes)),
-		ContentType:   "audio/webm",                  // Измените это на MIME-тип вашего аудиофайла
-		FileName:      uuid.New().String() + ".webm", // Измените это на соответствующее имя файла и расширение
+		ContentType:   "audio/webm",
+		FileName:      uuid.New().String() + ".webm",
 	}
 
 	response, err := s.Client.UploadMedia(s.Context, uploadRequest)
