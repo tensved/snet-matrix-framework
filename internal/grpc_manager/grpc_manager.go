@@ -11,53 +11,56 @@ import (
 	"time"
 )
 
-// GRPCClientManager manages a pool of GRPCService connections.
+// GRPCClientManager manages a pool of gRPC service connections.
 type GRPCClientManager struct {
-	clients map[string]*GRPCService
-	mu      sync.Mutex
+	clients map[string]*GRPCService // A map to store gRPC service connections by target address.
+	mu      sync.Mutex              // A mutex to ensure thread-safe access to the clients map.
 }
 
-// NewGRPCClientManager creates a new GRPCClientManager.
+// NewGRPCClientManager creates and returns a new GRPCClientManager.
 func NewGRPCClientManager() *GRPCClientManager {
 	return &GRPCClientManager{
-		clients: make(map[string]*GRPCService),
+		clients: make(map[string]*GRPCService), // Initializes the clients map.
 	}
 }
 
+// GRPCService represents a gRPC service with a connection to a target address.
 type GRPCService struct {
-	Target      string
-	DialOptions grpc.DialOption
-	Conn        *grpc.ClientConn
+	Target      string           // The target address of the gRPC service.
+	DialOptions grpc.DialOption  // The options for dialing the gRPC service.
+	Conn        *grpc.ClientConn // The client connection to the gRPC service.
 }
 
 // GetClient provides a managed connection to a gRPC service.
+// If a connection to the target already exists and is healthy, it returns the existing connection.
+// Otherwise, it creates a new connection.
 func (manager *GRPCClientManager) GetClient(target string) (*GRPCService, error) {
-	manager.mu.Lock()
+	manager.mu.Lock() // Locks the mutex to ensure thread-safe access.
 	defer manager.mu.Unlock()
 
 	if client, exists := manager.clients[target]; exists {
-		// Check if connection is still alive
+		// Check if the existing connection is still healthy.
 		if client.Conn.GetState() == connectivity.Ready {
 			return client, nil
 		}
-		// Close and delete stale connection
+		// Close and delete the stale connection.
 		client.Close()
 		delete(manager.clients, target)
 	}
 
-	// Create new client if not existing or deleted
+	// Create a new client if none exists or the existing one was stale.
 	newClient, err := NewGRPCService(target)
 	if err != nil {
 		return nil, err
 	}
-	manager.clients[target] = newClient
+	manager.clients[target] = newClient // Store the new client in the map.
 	return newClient, nil
 }
 
-// NewGRPCService creates and returns a new GRPCService.
+// NewGRPCService creates and returns a new GRPCService for the specified target address.
 func NewGRPCService(target string) (*GRPCService, error) {
-	dialOptions := grpc.WithTransportCredentials(insecure.NewCredentials())
-	conn, err := grpc.Dial(target, dialOptions)
+	dialOptions := grpc.WithTransportCredentials(insecure.NewCredentials()) // Use insecure credentials for the connection.
+	conn, err := grpc.Dial(target, dialOptions)                             // Dial the target address.
 	if err != nil {
 		return nil, err
 	}
@@ -71,17 +74,18 @@ func NewGRPCService(target string) (*GRPCService, error) {
 // Close closes the GRPCService connection.
 func (s *GRPCService) Close() {
 	if s.Conn != nil {
-		err := s.Conn.Close()
+		err := s.Conn.Close() // Close the connection.
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to close connection")
+			log.Error().Err(err).Msg("Failed to close connection") // Log an error if closing fails.
 		}
 	}
 }
 
-// CallMethod invoke grpc method
+// CallMethod invokes a gRPC method on the service.
+// It creates a new context with a timeout and attaches metadata to the context.
 func (s *GRPCService) CallMethod(method string, req, resp interface{}, md metadata.MD) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	ctx = metadata.NewOutgoingContext(ctx, md)
-	return s.Conn.Invoke(ctx, method, req, resp)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10) // Create a context with a timeout.
+	defer cancel()                                                           // Ensure the context is cancelled to free resources.
+	ctx = metadata.NewOutgoingContext(ctx, md)                               // Attach metadata to the context.
+	return s.Conn.Invoke(ctx, method, req, resp)                             // Invoke the gRPC method with the context, request, and response.
 }

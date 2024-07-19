@@ -6,72 +6,85 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Global configuration variables.
 var (
-	Postgres   PostgresConfig
-	App        AppConfig
-	Matrix     MatrixConfig
-	Blockchain BlockchainConfig
-	IPFS       IPFSConfig
+	Postgres   PostgresConfig   // Configuration for PostgreSQL.
+	App        AppConfig        // Configuration for the application.
+	Matrix     MatrixConfig     // Configuration for Matrix (chat protocol).
+	Blockchain BlockchainConfig // Configuration for Blockchain.
+	IPFS       IPFSConfig       // Configuration for IPFS (InterPlanetary File System).
 )
 
+// PostgresConfig holds the configuration values for connecting to a PostgreSQL database.
 type PostgresConfig struct {
-	User     string `env:"DB_USER"`
-	Password string `env:"DB_PASSWORD"`
-	Host     string `env:"DB_HOST"`
-	Port     string `env:"DB_PORT"`
-	Name     string `env:"DB_NAME"`
+	User     string `env:"DB_USER"`     // The username for the PostgreSQL database.
+	Password string `env:"DB_PASSWORD"` // The password for the PostgreSQL database.
+	Host     string `env:"DB_HOST"`     // The host address for the PostgreSQL database.
+	Port     string `env:"DB_PORT"`     // The port number for the PostgreSQL database.
+	Name     string `env:"DB_NAME"`     // The name of the PostgreSQL database.
 }
 
+// AppConfig holds the configuration values for the application.
 type AppConfig struct {
-	Port         string `env:"APP_PORT"`
-	Domain       string `env:"DOMAIN"`
-	IsProduction bool   `env:"PRODUCTION"`
+	Port         string `env:"APP_PORT"`   // The port on which the application runs.
+	Domain       string `env:"DOMAIN"`     // The domain name of the application.
+	IsProduction bool   `env:"PRODUCTION"` // Boolean flag indicating if the app is in production mode.
 }
 
+// IPFSConfig holds the configuration values for connecting to an IPFS provider.
 type IPFSConfig struct {
-	IPFSProviderURL string `env:"IPFS_PROVIDER_URL"`
-	Timeout         string `env:"IPFS_TIMEOUT"`
+	IPFSProviderURL string `env:"IPFS_PROVIDER_URL"` // The URL of the IPFS provider.
+	Timeout         string `env:"IPFS_TIMEOUT"`      // The timeout value for IPFS operations.
 }
 
+// BlockchainConfig holds the configuration values for connecting to a blockchain network.
 type BlockchainConfig struct {
-	AdminPrivateKey    string `env:"ADMIN_PRIVATE_KEY"`
-	AdminPublicAddress string `env:"ADMIN_PUBLIC_ADDRESS"`
-	EthProviderURL     string `env:"ETH_PROVIDER_URL"`
-	EthProviderWSURL   string `env:"ETH_PROVIDER_WS_URL"`
-	ChainID            string `env:"CHAIN_ID"`
-	TokenAddress       string `env:"TOKEN_ADDRESS"`
+	AdminPrivateKey    string `env:"ADMIN_PRIVATE_KEY"`    // The private key of the admin account.
+	AdminPublicAddress string `env:"ADMIN_PUBLIC_ADDRESS"` // The public address of the admin account.
+	EthProviderURL     string `env:"ETH_PROVIDER_URL"`     // The URL of the Ethereum provider.
+	EthProviderWSURL   string `env:"ETH_PROVIDER_WS_URL"`  // The WebSocket URL of the Ethereum provider.
+	ChainID            string `env:"CHAIN_ID"`             // The chain ID of the blockchain network.
 }
 
+// MatrixConfig holds the configuration values for connecting to a Matrix homeserver.
 type MatrixConfig struct {
-	HomeserverURL string `env:"MATRIX_HOMESERVER_URL"`
-	Servername    string `env:"MATRIX_SERVERNAME"`
-	Username      string `env:"MATRIX_BOT_USERNAME"`
-	Password      string `env:"MATRIX_BOT_PASSWORD"`
+	HomeserverURL string `env:"MATRIX_HOMESERVER_URL"` // The URL of the Matrix homeserver.
+	Servername    string `env:"MATRIX_SERVERNAME"`     // The server name of the Matrix homeserver.
+	Username      string `env:"MATRIX_BOT_USERNAME"`   // The username of the Matrix bot.
+	Password      string `env:"MATRIX_BOT_PASSWORD"`   // The password of the Matrix bot.
 }
 
+// Init loads environment variables and parses them into the respective configuration structs.
+// It first attempts to load environment variables from a .env file, and then parses the loaded variables.
 func Init() {
 	if err := godotenv.Load(); err != nil {
-		log.Debug().Msgf("Error loading .env file: %v", err)
+		log.Debug().Msgf("Error loading .env file: %v", err) // Log a debug message if .env file loading fails.
 	} else {
-		log.Debug().Msg(".env file loaded successfully")
+		log.Debug().Msg(".env file loaded successfully") // Log a debug message if .env file is loaded successfully.
 	}
+
+	// Parse environment variables into the AppConfig struct.
 	if err := env.Parse(&App); err != nil {
-		log.Debug().Msgf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
 	}
 
+	// Parse environment variables into the PostgresConfig struct.
 	if err := env.Parse(&Postgres); err != nil {
-		log.Debug().Msgf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
 	}
 
+	// Parse environment variables into the MatrixConfig struct.
 	if err := env.Parse(&Matrix); err != nil {
-		log.Debug().Msgf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
 	}
 
+	// Parse environment variables into the BlockchainConfig struct.
 	if err := env.Parse(&Blockchain); err != nil {
-		log.Debug().Msgf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
 	}
 
+	// Parse environment variables into the IPFSConfig struct.
 	if err := env.Parse(&IPFS); err != nil {
-		log.Debug().Msgf("%+v\n", err)
+		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
 	}
 }

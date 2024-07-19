@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"github.com/bufbuild/protocompile"
 	"github.com/rs/zerolog/log"
+	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
+	"github.com/tensved/snet-matrix-framework/pkg/db"
+	ipfs "github.com/tensved/snet-matrix-framework/pkg/ipfs"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"matrix-ai-framework/pkg/blockchain"
-	"matrix-ai-framework/pkg/db"
-	ipfs "matrix-ai-framework/pkg/ipfs"
 	"strings"
 	"time"
 )

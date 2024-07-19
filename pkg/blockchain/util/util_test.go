@@ -6,8 +6,12 @@ import (
 	"testing"
 )
 
+// TestAgixToCog tests the AgixToCog function for various inputs and expected outputs.
+// It checks the conversion of AGIX to COG for different values.
+//
+// Parameters:
+//   - t: The testing framework instance.
 func TestAgixToCog(t *testing.T) {
-
 	type testpair struct {
 		value          string
 		expectedResult *big.Int
@@ -47,8 +51,12 @@ func TestAgixToCog(t *testing.T) {
 	}
 }
 
+// TestCogToAgix tests the CogToAgix function for various inputs and expected outputs.
+// It checks the conversion of COG to AGIX for different values.
+//
+// Parameters:
+//   - t: The testing framework instance.
 func TestCogToAgix(t *testing.T) {
-
 	type testpair struct {
 		value          *big.Int
 		expectedResult string
