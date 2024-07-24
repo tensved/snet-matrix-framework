@@ -2,15 +2,15 @@ package app
 
 import (
 	"github.com/rs/zerolog/log"
-	"matrix-ai-framework/internal/config"
-	"matrix-ai-framework/internal/grpc_manager"
-	"matrix-ai-framework/internal/logger"
-	"matrix-ai-framework/internal/matrix"
-	"matrix-ai-framework/internal/server"
-	"matrix-ai-framework/internal/snet_syncer"
-	"matrix-ai-framework/pkg/blockchain"
-	"matrix-ai-framework/pkg/db"
-	ipfs "matrix-ai-framework/pkg/ipfs"
+	"github.com/tensved/snet-matrix-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/internal/grpc_manager"
+	"github.com/tensved/snet-matrix-framework/internal/logger"
+	"github.com/tensved/snet-matrix-framework/internal/matrix"
+	"github.com/tensved/snet-matrix-framework/internal/server"
+	"github.com/tensved/snet-matrix-framework/internal/snet_syncer"
+	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
+	"github.com/tensved/snet-matrix-framework/pkg/db"
+	ipfs "github.com/tensved/snet-matrix-framework/pkg/ipfs"
 	"maunium.net/go/mautrix/event"
 	"time"
 )
@@ -67,7 +67,7 @@ func (app App) Run() {
 	}()
 
 	app.Fiber.RegisterFiberRoutes()
-	err = app.Fiber.Listen(":" + config.App.Port)
+	err = app.Fiber.App.Listen(":" + config.App.Port)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to start fiber server")
 	}
