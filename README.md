@@ -84,4 +84,4 @@ The snet-matrix-framework is designed to create bots that will connect the messe
 
 - Make sure your domain has the correct A records configured
 - Use `docker compose run --rm certbot renew` to renew certs
-- The minimal example of service is located at the path `pkg/lib/examples/snet/main.go`
+- The minimal example of service is located at the path `cmd/main.go`
