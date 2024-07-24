@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/rs/zerolog/log"
+	"github.com/tensved/snet-matrix-framework/internal/app"
+	"github.com/tensved/snet-matrix-framework/internal/config"
 	"log/slog"
-	"matrix-ai-framework/internal/app"
-	"matrix-ai-framework/internal/config"
 	"time"
 )
 
@@ -70,7 +70,7 @@ func DefaultSNETEngine() *Engine {
 
 	go func() {
 		a.Fiber.RegisterFiberRoutes()
-		err := a.Fiber.Listen(":" + config.App.Port)
+		err := a.Fiber.App.Listen(":" + config.App.Port)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to start fiber server")
 		}

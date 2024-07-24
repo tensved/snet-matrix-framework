@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN go generate ./...
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./pkg/lib/examples/snet/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/main.go
 
 # Serve stage
 FROM alpine:latest

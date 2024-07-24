@@ -2,11 +2,12 @@ package blockchain
 
 import (
 	"encoding/json"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rs/zerolog/log"
 	contracts "github.com/singnet/snet-ecosystem-contracts"
-	"matrix-ai-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/internal/config"
 )
 
 var (
@@ -21,9 +22,6 @@ const (
 	FreeCallPrefixSignature = "__prefix_free_trial"
 	//Agreed constant value
 	AllowedUserPrefixSignature = "__authorized_user"
-)
-
-const (
 	// PaymentTypeHeader is a type of payment used to pay for an RPC call.
 	// Supported types are: "escrow".
 	// Note: "job" Payment type is deprecated
@@ -75,10 +73,12 @@ const (
 	DynamicPriceDerived = "snet-derived-dynamic-price-cost"
 )
 
+// EthereumService defines the interface for initializing the Ethereum registry.
 type EthereumService interface {
 	InitRegistry() (err error)
 }
 
+// Ethereum represents the Ethereum client, including HTTP and WebSocket clients, registry, and MPE (MultiPartyEscrow) contracts.
 type Ethereum struct {
 	Client     *ethclient.Client
 	WSSClient  *ethclient.Client
@@ -87,6 +87,10 @@ type Ethereum struct {
 	MPEAddress common.Address
 }
 
+// Init initializes the Ethereum client and connects to the blockchain via HTTPS and WSS. It also initializes the registry and MPE contracts.
+//
+// Returns:
+//   - e: An instance of Ethereum containing the initialized clients and contracts.
 func Init() (e Ethereum) {
 	var err error
 	log.Debug().Any("ETH_URL", config.Blockchain.EthProviderURL).Msg("ETH_URL")
@@ -109,10 +113,15 @@ func Init() (e Ethereum) {
 	return e
 }
 
+// networks represents a mapping of network names to their respective addresses.
 type networks map[string]struct {
 	Address string `json:"address"`
 }
 
+// InitRegistry initializes the Ethereum registry contract by fetching the network address and creating a new Registry instance.
+//
+// Returns:
+//   - err: An error if the operation fails.
 func (eth *Ethereum) InitRegistry() (err error) {
 	networksRaw := contracts.GetNetworks(contracts.Registry)
 	var n networks
@@ -130,6 +139,10 @@ func (eth *Ethereum) InitRegistry() (err error) {
 	return
 }
 
+// InitMPE initializes the MultiPartyEscrow contract by fetching the network address and creating a new MultiPartyEscrow instance.
+//
+// Returns:
+//   - err: An error if the operation fails.
 func (eth *Ethereum) InitMPE() (err error) {
 	var n networks
 	networksRaw := contracts.GetNetworks(contracts.MultiPartyEscrow)
@@ -145,10 +158,18 @@ func (eth *Ethereum) InitMPE() (err error) {
 		log.Fatal().Err(err).Msg("Failed to init MPE")
 	}
 	eth.MPEAddress = common.HexToAddress(address)
+	callOpts := &bind.CallOpts{}
+	tokenAddress, _ := eth.MPE.Token(callOpts)
+	log.Debug().Msgf("Token address: %s", tokenAddress)
 
 	return
 }
 
+// GetOrgs retrieves a list of organization IDs from the registry contract.
+//
+// Returns:
+//   - orgsIDs: A slice of organization IDs.
+//   - err: An error if the operation fails.
 func (eth Ethereum) GetOrgs() (orgsIDs [][32]byte, err error) {
 	orgsIDs, err = eth.Registry.ListOrganizations(nil)
 	if err != nil {
@@ -157,6 +178,7 @@ func (eth Ethereum) GetOrgs() (orgsIDs [][32]byte, err error) {
 	return
 }
 
+// Org represents an organization with its metadata.
 type Org struct {
 	Found          bool
 	Id             [32]byte
@@ -166,6 +188,14 @@ type Org struct {
 	ServiceIds     [][32]byte
 }
 
+// GetOrg retrieves an organization by its ID from the registry contract.
+//
+// Parameters:
+//   - orgID: The ID of the organization.
+//
+// Returns:
+//   - org: The retrieved organization.
+//   - err: An error if the operation fails.
 func (eth Ethereum) GetOrg(orgID [32]byte) (org Org, err error) {
 	org, err = eth.Registry.GetOrganizationById(nil, orgID)
 	if err != nil {
@@ -175,12 +205,22 @@ func (eth Ethereum) GetOrg(orgID [32]byte) (org Org, err error) {
 	return
 }
 
+// Service represents a service with its metadata.
 type Service struct {
 	Found       bool
 	Id          [32]byte
 	MetadataURI []byte
 }
 
+// GetService retrieves a service by its organization ID and service ID from the registry contract.
+//
+// Parameters:
+//   - orgID: The ID of the organization.
+//   - serviceID: The ID of the service.
+//
+// Returns:
+//   - service: The retrieved service.
+//   - err: An error if the operation fails.
 func (eth Ethereum) GetService(orgID, serviceID [32]byte) (service Service, err error) {
 	service, err = eth.Registry.GetServiceRegistrationById(nil, orgID, serviceID)
 	if err != nil {

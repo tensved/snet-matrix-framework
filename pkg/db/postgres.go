@@ -8,17 +8,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+	"github.com/tensved/snet-matrix-framework/internal/config"
 	"math/big"
-	"matrix-ai-framework/internal/config"
 	"strings"
 	"time"
 )
 
+// postgres wraps the pgxpool.Pool to provide additional methods.
 type postgres struct {
-	*pgxpool.Pool
+	*pgxpool.Pool // Connection pool for PostgreSQL.
 }
 
-// New initializes a new postgres connection.
+// New initializes a new PostgreSQL connection pool and returns a Service interface.
+//
+// Returns:
+//   - A Service interface that wraps the PostgreSQL connection pool.
 func New() Service {
 	dbURL := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", config.Postgres.User, config.Postgres.Password, config.Postgres.Host, config.Postgres.Port, config.Postgres.Name)
 	pool, err := pgxpool.New(context.Background(), dbURL)
@@ -110,6 +114,10 @@ func New() Service {
 	return db
 }
 
+// Health checks the health of the database connection.
+//
+// Returns:
+//   - A map with a health status message.
 func (p *postgres) Health() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -124,7 +132,14 @@ func (p *postgres) Health() map[string]string {
 	}
 }
 
-// CreateSnetService creates snet service
+// CreateSnetService creates a new snet service in the database.
+//
+// Parameters:
+//   - s: An instance of SnetService containing service details.
+//
+// Returns:
+//   - id: The ID of the created service.
+//   - error: An error if the operation fails.
 func (p *postgres) CreateSnetService(s SnetService) (id int, err error) {
 	row := p.Pool.QueryRow(context.Background(),
 		`
@@ -158,7 +173,14 @@ func (p *postgres) CreateSnetService(s SnetService) (id int, err error) {
 	return
 }
 
-// CreateSnetOrg creates snet organization
+// CreateSnetOrg creates a new snet organization in the database.
+//
+// Parameters:
+//   - org: An instance of SnetOrganization containing organization details.
+//
+// Returns:
+//   - id: The ID of the created organization.
+//   - error: An error if the operation fails.
 func (p *postgres) CreateSnetOrg(org SnetOrganization) (id int, err error) {
 	row := p.Pool.QueryRow(context.Background(),
 		`
@@ -184,7 +206,14 @@ func (p *postgres) CreateSnetOrg(org SnetOrganization) (id int, err error) {
 	return
 }
 
-// CreateSnetOrgGroups creates snet organization group
+// CreateSnetOrgGroups creates multiple snet organization groups in the database.
+//
+// Parameters:
+//   - orgID: The ID of the organization to which the groups belong.
+//   - groups: A slice of SnetOrgGroup containing group details.
+//
+// Returns:
+//   - error: An error if the operation fails.
 func (p *postgres) CreateSnetOrgGroups(orgID int, groups []SnetOrgGroup) (err error) {
 	ctx := context.Background()
 	tx, err := p.Pool.Begin(ctx)
@@ -211,9 +240,15 @@ func (p *postgres) CreateSnetOrgGroups(orgID int, groups []SnetOrgGroup) (err er
 	return tx.Commit(ctx)
 }
 
-// GetSnetOrgGroup retrieves a snet organization group
+// GetSnetOrgGroup retrieves a snet organization group from the database.
+//
+// Parameters:
+//   - groupID: The ID of the group to retrieve.
+//
+// Returns:
+//   - g: The retrieved SnetOrgGroup instance.
+//   - error: An error if the operation fails.
 func (p *postgres) GetSnetOrgGroup(groupID string) (g SnetOrgGroup, err error) {
-
 	row := p.Pool.QueryRow(context.Background(), "SELECT * FROM snet_org_groups WHERE group_id=$1 AND deleted_at is NULL", groupID)
 	var paymentExpirationThreshold int64
 	err = row.Scan(&g.ID, &g.OrgID, &g.GroupID, &g.GroupName, &g.PaymentAddress, &paymentExpirationThreshold, &g.CreatedAt, &g.UpdatedAt, &g.DeletedAt)
@@ -233,7 +268,11 @@ func (p *postgres) GetSnetOrgGroup(groupID string) (g SnetOrgGroup, err error) {
 	return
 }
 
-// GetSnetServices retrieves a list of services
+// GetSnetServices retrieves a list of snet services from the database.
+//
+// Returns:
+//   - services: A slice of SnetService instances.
+//   - error: An error if the operation fails.
 func (p *postgres) GetSnetServices() (services []SnetService, err error) {
 	rows, err := p.Pool.Query(context.Background(), "SELECT * FROM snet_services")
 	if err != nil {
@@ -247,12 +286,16 @@ func (p *postgres) GetSnetServices() (services []SnetService, err error) {
 	return services, err
 }
 
-// GetSnetOrgs retrieves a list of organizations
+// GetSnetOrgs retrieves a list of snet organizations from the database.
+//
+// Returns:
+//   - orgs: A slice of SnetOrganization instances.
+//   - error: An error if the operation fails.
 func (p *postgres) GetSnetOrgs() ([]SnetOrganization, error) {
 	rows, err := p.Pool.Query(context.Background(), "SELECT * FROM snet_organizations WHERE deleted_at is NULL")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to retrieve snet orgs")
-		return nil, nil
+		return nil, err
 	}
 	orgs, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[SnetOrganization])
 	if err != nil {
@@ -261,7 +304,14 @@ func (p *postgres) GetSnetOrgs() ([]SnetOrganization, error) {
 	return orgs, err
 }
 
-// GetSnetService retrieves a snet service
+// GetSnetService retrieves a snet service from the database.
+//
+// Parameters:
+//   - snetID: The ID of the service to retrieve.
+//
+// Returns:
+//   - s: The retrieved SnetService instance.
+//   - error: An error if the operation fails.
 func (p *postgres) GetSnetService(snetID string) (s SnetService, err error) {
 	row := p.Pool.QueryRow(context.Background(), "SELECT * FROM snet_services WHERE snet_id=$1 AND deleted_at is NULL", snetID)
 	err = row.Scan(&s.ID, &s.SnetID, &s.SnetOrgID, &s.OrgID, &s.Version, &s.DisplayName, &s.Encoding, &s.ServiceType, &s.ModelIpfsHash, &s.MPEAddress, &s.URL, &s.Price, &s.GroupID, &s.FreeCalls, &s.FreeCallSignerAddress, &s.ShortDescription, &s.Description, &s.CreatedAt, &s.UpdatedAt, &s.DeletedAt)
@@ -277,7 +327,14 @@ func (p *postgres) GetSnetService(snetID string) (s SnetService, err error) {
 	return
 }
 
-// CreatePaymentState creates a payment state
+// CreatePaymentState creates a new payment state in the database.
+//
+// Parameters:
+//   - ps: An instance of PaymentState containing payment details.
+//
+// Returns:
+//   - id: The UUID of the created payment state.
+//   - error: An error if the operation fails.
 func (p *postgres) CreatePaymentState(ps *PaymentState) (id uuid.UUID, err error) {
 	query := `INSERT INTO payment_states (id, url, key, token_address, to_address, amount) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
 	row := p.Pool.QueryRow(context.Background(), query, ps.ID, ps.URL, ps.Key, ps.TokenAddress, ps.ToAddress, ps.Amount)
@@ -288,12 +345,20 @@ func (p *postgres) CreatePaymentState(ps *PaymentState) (id uuid.UUID, err error
 	return
 }
 
-// GetPaymentStateByKey retrieves a payment state
+// GetPaymentStateByKey retrieves a payment state from the database using a key.
+//
+// Parameters:
+//   - key: The key to retrieve the payment state.
+//
+// Returns:
+//   - ps: The retrieved PaymentState instance.
+//   - error: An error if the operation fails.
 func (p *postgres) GetPaymentStateByKey(key string) (ps *PaymentState, err error) {
 	query := `SELECT * FROM payment_states WHERE key = $1 AND status != 'paid'`
 	row := p.Pool.QueryRow(context.Background(), query, key)
 	ps = &PaymentState{}
-	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &ps.Amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
+	var amount int64
+	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Error().Err(err).Msgf("No payment state found with key %s", key)
@@ -306,12 +371,20 @@ func (p *postgres) GetPaymentStateByKey(key string) (ps *PaymentState, err error
 	return
 }
 
-// GetPaymentState retrieves a payment state
+// GetPaymentState retrieves a payment state from the database using an ID.
+//
+// Parameters:
+//   - id: The UUID of the payment state to retrieve.
+//
+// Returns:
+//   - ps: The retrieved PaymentState instance.
+//   - error: An error if the operation fails.
 func (p *postgres) GetPaymentState(id uuid.UUID) (ps *PaymentState, err error) {
 	query := `SELECT * FROM payment_states WHERE id = $1 AND status != 'paid'`
 	row := p.Pool.QueryRow(context.Background(), query, id)
 	ps = &PaymentState{}
-	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &ps.Amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
+	var amount int64
+	err = row.Scan(&ps.ID, &ps.URL, &ps.Status, &ps.Key, &ps.TxHash, &ps.TokenAddress, &ps.ToAddress, &amount, &ps.CreatedAt, &ps.UpdatedAt, &ps.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Error().Err(err).Msgf("No payment state found with id %s", id)
@@ -324,7 +397,13 @@ func (p *postgres) GetPaymentState(id uuid.UUID) (ps *PaymentState, err error) {
 	return
 }
 
-// PatchUpdatePaymentState updates only the specified fields of a payment state
+// PatchUpdatePaymentState updates specific fields of a payment state in the database.
+//
+// Parameters:
+//   - ps: An instance of PaymentState containing the fields to update.
+//
+// Returns:
+//   - error: An error if the operation fails.
 func (p *postgres) PatchUpdatePaymentState(ps *PaymentState) (err error) {
 	query := "UPDATE payment_states SET updated_at = NOW(), "
 	updates := []string{}
