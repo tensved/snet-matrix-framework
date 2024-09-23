@@ -32,7 +32,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: install dependencies
-        run: go mod download
+        run: |
+          go mod tidy
+          go mod download
 
       - name: protobuff install
         run: |
@@ -74,7 +76,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: install dependencies
-        run: go mod download
+        run: |
+          go mod tidy
+          go mod download
 
       - name: protobuff install
         run: |
@@ -122,7 +126,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: install dependencies
-        run: go mod download
+        run: |
+          go mod tidy
+          go mod download
 
       - name: install golangci-lint
         run: |
