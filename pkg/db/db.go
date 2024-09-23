@@ -10,11 +10,11 @@ import (
 type Service interface {
 	GetSnetOrgs() ([]SnetOrganization, error)                                // Retrieves a list of Snet organizations.
 	GetSnetServices() ([]SnetService, error)                                 // Retrieves a list of Snet services.
-	GetSnetService(snetID string) (s SnetService, err error)                 // Retrieves a specific Snet service by its ID.
+	GetSnetService(snetID string) (s *SnetService, err error)                // Retrieves a specific Snet service by its Id.
 	CreateSnetService(service SnetService) (id int, err error)               // Creates a new Snet service.
 	CreateSnetOrg(organization SnetOrganization) (id int, err error)         // Creates a new Snet organization.
 	CreateSnetOrgGroups(orgID int, groups []SnetOrgGroup) (err error)        // Creates multiple Snet organization groups.
-	GetSnetOrgGroup(groupID string) (SnetOrgGroup, error)                    // Retrieves a specific Snet organization group by its ID.
+	GetSnetOrgGroup(groupID string) (SnetOrgGroup, error)                    // Retrieves a specific Snet organization group by its Id.
 	CreatePaymentState(paymentState *PaymentState) (id uuid.UUID, err error) // Creates a new payment state.
 	GetPaymentState(id uuid.UUID) (ps *PaymentState, err error)              // Retrieves a specific payment state by its UUID.
 	GetPaymentStateByKey(key string) (ps *PaymentState, err error)           // Retrieves a payment state by its key.

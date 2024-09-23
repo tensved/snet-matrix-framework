@@ -1,63 +1,63 @@
 package matrix
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/snet-matrix-framework/internal/config"
-	"github.com/tensved/snet-matrix-framework/internal/grpc_manager"
-	"github.com/tensved/snet-matrix-framework/internal/snet_syncer"
+	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
+	"github.com/tensved/snet-matrix-framework/internal/syncer"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
 	"golang.org/x/net/html"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
-	"net/http"
 	"strings"
 	"time"
 )
 
+// Service defines the methods for interacting with the Matrix Synapse server.
 type Service interface {
 	Register(username, password string) (err error)
 	Login(username, password string) (err error)
 	Auth()
-	StartListening(ch chan *event.Event) (err error)
 	SendMessage(roomID id.RoomID, text string) (*mautrix.RespSendEvent, error)
-	SendMessageWithMedia(roomID, mxcURI, message string) error
-	IsPrivateRoom(roomID id.RoomID) (bool, error)
 	GetRepliedEvent(evt *event.Event) (*event.Event, error)
+	IsPrivateRoom(roomID id.RoomID) (bool, error)
 }
 
+// service is an implementation of the Service interface.
 type service struct {
-	Client      *mautrix.Client
-	Context     context.Context
-	Syncer      *mautrix.DefaultSyncer
-	startTime   time.Time
-	db          db.Service
-	snetSyncer  snet_syncer.SnetSyncer
-	grpcManager *grpc_manager.GRPCClientManager
-	eth         blockchain.Ethereum
+	Client      *mautrix.Client                // Client is the Matrix client used to communicate with the Matrix server.
+	Context     context.Context                // Context is used for managing request lifecycles.
+	Syncer      *mautrix.DefaultSyncer         // Syncer is used to synchronize events with the Matrix server.
+	startTime   time.Time                      // startTime holds the service start time.
+	db          db.Service                     // db provides access to the database layer.
+	snetSyncer  syncer.SnetSyncer              // snetSyncer is responsible for network synchronization.
+	grpcManager *grpcmanager.GRPCClientManager // grpcManager manages gRPC client connections.
+	eth         blockchain.Ethereum            // eth provides access to the Ethereum blockchain.
 }
 
-func New(db db.Service, snetSyncer snet_syncer.SnetSyncer, grpcManager *grpc_manager.GRPCClientManager, eth blockchain.Ethereum) Service {
+// New creates a new instance of the service and initializes the Matrix client.
+func New(db db.Service, snetSyncer syncer.SnetSyncer, grpcManager *grpcmanager.GRPCClientManager, eth blockchain.Ethereum) Service {
 	client, err := mautrix.NewClient(config.Matrix.HomeserverURL, "", "")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create Matrix client")
+		log.Error().Err(err).Msg("failed to create Matrix client")
 	}
-	ctx := context.Background()
-	syncer := client.Syncer.(*mautrix.DefaultSyncer)
-	m := &service{client, ctx, syncer, time.Now(), db, snetSyncer, grpcManager, eth}
-	log.Info().Msg("Matrix connect established")
+	sync, ok := client.Syncer.(*mautrix.DefaultSyncer)
+	if !ok {
+		log.Error().Msg("failed to assert client.Syncer to *mautrix.DefaultSyncer")
+		return nil
+	}
+	m := &service{client, context.Background(), sync, time.Now(), db, snetSyncer, grpcManager, eth}
+	log.Debug().Msg("Matrix connect established")
 	return m
 }
 
-func (s *service) Register(username, password string) (err error) {
+// Register registers a new user with the given username and password on the Matrix server.
+func (s *service) Register(username, password string) error {
 	resp, err := s.Client.RegisterDummy(s.Context, &mautrix.ReqRegister{
 		Username:     username,
 		Password:     password,
@@ -66,14 +66,15 @@ func (s *service) Register(username, password string) (err error) {
 		Type:         "m.login.password",
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to register")
+		return err
 	}
 	s.Client.UserID = resp.UserID
 	s.Client.AccessToken = resp.AccessToken
-	return
+	return nil
 }
 
-func (s *service) Login(username, password string) (err error) {
+// Login logs in a user with the given username and password on the Matrix server.
+func (s *service) Login(username, password string) error {
 	resp, err := s.Client.Login(s.Context, &mautrix.ReqLogin{
 		Type: "m.login.password",
 		Identifier: mautrix.UserIdentifier{
@@ -83,101 +84,66 @@ func (s *service) Login(username, password string) (err error) {
 		Password: password,
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to login")
+		return err
 	}
 	s.Client.UserID = resp.UserID
 	s.Client.AccessToken = resp.AccessToken
-	return
+	return nil
 }
 
-func (s *service) GetUserProfile(userID string) (err error) {
+// GetUserProfile retrieves the profile of a user by their user ID.
+func (s *service) GetUserProfile(userID string) error {
 	matrixUserID := id.UserID(userID)
-	_, err = s.Client.GetProfile(s.Context, matrixUserID)
+	_, err := s.Client.GetProfile(s.Context, matrixUserID)
 	if err != nil {
-		log.Error().Err(err).Msg("Cannot get user profile")
+		return err
 	}
-	return
+	return nil
 }
 
+// Auth performs authentication by either logging in or registering the user depending on their existing profile.
 func (s *service) Auth() {
 	userID := fmt.Sprintf("@%s:%s", config.Matrix.Username, config.Matrix.Servername)
 	err := s.GetUserProfile(userID)
 	if err != nil {
 		err = s.Register(config.Matrix.Username, config.Matrix.Password)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to auth")
+			log.Error().Err(err).Msg("failed to auth")
+			return
 		}
+		log.Error().Err(err)
 	} else {
 		err = s.Login(config.Matrix.Username, config.Matrix.Password)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to auth")
+			log.Error().Err(err).Msg("failed to auth")
+			return
 		}
 	}
-	log.Info().Msg("Matrix access token updated")
 }
 
-func (s *service) StartListening(events chan *event.Event) (err error) {
-	log.Info().Msg("Matrix event listener started")
-	s.Syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
-		eventTime := time.Unix(0, evt.Timestamp*int64(time.Millisecond))
-		if eventTime.After(s.startTime) {
-			log.Info().Msgf("Receive invite to room %v", evt.RoomID)
-			if evt.GetStateKey() == s.Client.UserID.String() && evt.Content.AsMember().Membership == event.MembershipInvite {
-				_, err = s.Client.JoinRoomByID(s.Context, evt.RoomID)
-				log.Debug().Msgf("Joined to room %v", evt.RoomID)
-				if err != nil {
-					log.Error().Err(err).Msg("Failed to join room")
-				}
-			}
-		}
-	})
-
-	s.Syncer.OnEventType(event.EventMessage, func(ctx context.Context, evt *event.Event) {
-		if evt.Sender == s.Client.UserID {
-			return // Ignore messages sent by the bot
-		}
-		eventTime := time.Unix(0, evt.Timestamp*int64(time.Millisecond))
-		if eventTime.After(s.startTime) {
-			events <- evt
-		}
-	})
-
-	go func() {
-		for {
-			log.Info().Msg("Matrix events sync started")
-			err = s.Client.Sync()
-			if err != nil {
-				log.Error().Err(err).Msg("Sync failed")
-				time.Sleep(5 * time.Second)
-			}
-		}
-	}()
-	return
-}
-
+// isReply checks if the event is a reply to another event.
 func isReply(evt *event.Event) bool {
 	return evt.Content.AsMessage().RelatesTo != nil && evt.Content.AsMessage().RelatesTo.InReplyTo != nil
 }
 
+// IsPrivateRoom checks if the given room ID corresponds to a private room with exactly two members.
 func (s *service) IsPrivateRoom(roomID id.RoomID) (bool, error) {
 	members, err := s.Client.JoinedMembers(s.Context, roomID)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get joined members")
 		return false, err
 	}
-
 	return len(members.Joined) == 2, nil
 }
 
+// GetRepliedEvent retrieves the event to which the given event is a reply.
 func (s *service) GetRepliedEvent(evt *event.Event) (*event.Event, error) {
-
 	if !isReply(evt) {
-		return nil, errors.New("Not a reply")
+		return nil, errors.New("not a reply")
 	}
-
 	return s.Client.GetEvent(s.Context, evt.RoomID, evt.Content.AsMessage().RelatesTo.InReplyTo.EventID)
 }
 
+// ExtractTexts extracts the original and reply texts from a formatted body of an event.
 func ExtractTexts(formattedBody string) (originalText, replyText string, err error) {
 	doc, err := html.Parse(strings.NewReader(formattedBody))
 	if err != nil {
@@ -207,8 +173,8 @@ func ExtractTexts(formattedBody string) (originalText, replyText string, err err
 	return strings.TrimSpace(originalText), strings.TrimSpace(replyText), nil
 }
 
+// SendMessage sends a text message to the specified room on the Matrix server.
 func (s *service) SendMessage(roomID id.RoomID, text string) (*mautrix.RespSendEvent, error) {
-
 	content := event.MessageEventContent{
 		MsgType:       event.MsgText,
 		Body:          text,
@@ -216,51 +182,4 @@ func (s *service) SendMessage(roomID id.RoomID, text string) (*mautrix.RespSendE
 		FormattedBody: fmt.Sprintf("<p>%s</p>", text),
 	}
 	return s.Client.SendMessageEvent(s.Context, roomID, event.EventMessage, content)
-}
-
-func (s *service) UploadAudio(base64Audio string) (id.ContentURIString, error) {
-	audioBytes, err := base64.StdEncoding.DecodeString(base64Audio)
-	if err != nil {
-		log.Error().Err(err).Msg("Base64 decoding error")
-	}
-
-	uploadRequest := mautrix.ReqUploadMedia{
-		ContentBytes:  audioBytes,
-		ContentLength: int64(len(audioBytes)),
-		ContentType:   "audio/webm",
-		FileName:      uuid.New().String() + ".webm",
-	}
-
-	response, err := s.Client.UploadMedia(s.Context, uploadRequest)
-	if err != nil {
-		log.Error().Err(err).Msg("Uploading error")
-	}
-	log.Info().Msgf("Media upload response: %v", response.ContentURI)
-	mxcURI := "mxc://" + response.ContentURI.Homeserver + "/" + response.ContentURI.FileID
-	return id.ContentURIString(mxcURI), nil
-}
-
-func (s *service) SendMessageWithMedia(roomID, mxcURI, message string) error {
-
-	jsonValue, _ := json.Marshal(map[string]interface{}{
-		"msgtype":        "m.text",
-		"body":           message,
-		"format":         "org.matrix.custom.html",
-		"formatted_body": fmt.Sprintf("%s\n<img src=\"%s\" alt=\"alt text\"/>", message, mxcURI),
-	})
-
-	request, err := http.NewRequest("POST", config.Matrix.HomeserverURL+"/_matrix/client/r0/rooms/"+roomID+"/send/m.room.message?access_token="+s.Client.AccessToken, bytes.NewBuffer(jsonValue))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return nil
 }

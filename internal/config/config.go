@@ -4,6 +4,7 @@ import (
 	"github.com/caarlos0/env/v10"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
+	"regexp"
 )
 
 // Global configuration variables.
@@ -26,15 +27,17 @@ type PostgresConfig struct {
 
 // AppConfig holds the configuration values for the application.
 type AppConfig struct {
-	Port         string `env:"APP_PORT"`   // The port on which the application runs.
-	Domain       string `env:"DOMAIN"`     // The domain name of the application.
-	IsProduction bool   `env:"PRODUCTION"` // Boolean flag indicating if the app is in production mode.
+	Port           string `env:"APP_PORT"`        // The port on which the application runs.
+	Domain         string `env:"DOMAIN"`          // The domain name of the application.
+	IsProduction   bool   `env:"PRODUCTION"`      // Boolean flag indicating if the app is in production mode.
+	PaymentTimeout int    `env:"PAYMENT_TIMEOUT"` // Number of minutes during which user can pay for a service call
 }
 
 // IPFSConfig holds the configuration values for connecting to an IPFS provider.
 type IPFSConfig struct {
-	IPFSProviderURL string `env:"IPFS_PROVIDER_URL"` // The URL of the IPFS provider.
-	Timeout         string `env:"IPFS_TIMEOUT"`      // The timeout value for IPFS operations.
+	IPFSProviderURL  string         `env:"IPFS_PROVIDER_URL"` // The URL of the IPFS provider.
+	Timeout          string         `env:"IPFS_TIMEOUT"`      // The timeout value for IPFS operations.
+	HashCutterRegexp *regexp.Regexp // Regexp for remove special character from ipfs hash
 }
 
 // BlockchainConfig holds the configuration values for connecting to a blockchain network.
@@ -58,33 +61,28 @@ type MatrixConfig struct {
 // It first attempts to load environment variables from a .env file, and then parses the loaded variables.
 func Init() {
 	if err := godotenv.Load(); err != nil {
-		log.Debug().Msgf("Error loading .env file: %v", err) // Log a debug message if .env file loading fails.
+		log.Error().Err(err)
 	} else {
 		log.Debug().Msg(".env file loaded successfully") // Log a debug message if .env file is loaded successfully.
 	}
 
-	// Parse environment variables into the AppConfig struct.
 	if err := env.Parse(&App); err != nil {
-		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
+		log.Error().Err(err)
 	}
 
-	// Parse environment variables into the PostgresConfig struct.
 	if err := env.Parse(&Postgres); err != nil {
-		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
+		log.Error().Err(err)
 	}
 
-	// Parse environment variables into the MatrixConfig struct.
 	if err := env.Parse(&Matrix); err != nil {
-		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
+		log.Error().Err(err)
 	}
 
-	// Parse environment variables into the BlockchainConfig struct.
 	if err := env.Parse(&Blockchain); err != nil {
-		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
+		log.Error().Err(err)
 	}
 
-	// Parse environment variables into the IPFSConfig struct.
 	if err := env.Parse(&IPFS); err != nil {
-		log.Debug().Msgf("%+v\n", err) // Log a debug message if parsing fails.
+		log.Error().Err(err)
 	}
 }

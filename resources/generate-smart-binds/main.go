@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-
 	bindContent, err := bind.Bind(
 		[]string{"MultiPartyEscrow", "Registry"},
 		[]string{
@@ -19,11 +18,10 @@ func main() {
 			string(contracts.GetBytecodeClean(contracts.Registry))},
 		nil, "blockchain", bind.LangGo, nil, nil)
 	if err != nil {
-		log.Fatalf("Failed to generate binding: %v", err)
+		log.Fatalf("failed to generate binding: %v", err)
 	}
 
-	if err := os.WriteFile("registry_and_mpe.go", []byte(bindContent), 0600); err != nil {
-		log.Fatalf("Failed to write ABI binding: %v", err)
+	if err = os.WriteFile("registry_and_mpe.go", []byte(bindContent), 0600); err != nil {
+		log.Fatalf("failed to write ABI binding: %v", err)
 	}
-
 }

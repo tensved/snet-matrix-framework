@@ -4,7 +4,6 @@ import (
 	"flag"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // Setup initializes the logging configuration using the zerolog package.
@@ -26,8 +25,4 @@ func Setup() {
 	if *debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-
-	// Log messages indicating the current log level.
-	log.Debug().Msg("Log level set to Debug")
-	log.Info().Msg("Log level set to Debug or Info")
 }

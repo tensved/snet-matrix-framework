@@ -3,6 +3,7 @@
 package blockchain
 
 import (
+	"errors"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
 	"math/big"
 )
@@ -28,7 +29,7 @@ type OrganizationMetaData struct {
 	Assets struct {
 		HeroImage string `json:"hero_image"` // Hero image URL.
 	} `json:"assets"` // Organization assets.
-	Owner string // Owner of the organization.
+	Owner string `json:"owner"` // Owner of the organization.
 }
 
 // DB converts OrganizationMetaData to db.SnetOrganization and a slice of db.SnetOrgGroup.
@@ -64,32 +65,37 @@ func (o OrganizationMetaData) DB() (db.SnetOrganization, []db.SnetOrgGroup) {
 //
 // Returns:
 //   - db.SnetService: The database representation of the service.
-func (s ServiceMetadata) DB() db.SnetService {
-	return db.SnetService{
-		ID:                    s.ID,
-		SnetID:                s.SnetID,
-		SnetOrgID:             s.SnetOrgID,
-		OrgID:                 s.OrgID,
-		Version:               s.Version,
-		DisplayName:           s.DisplayName,
-		Encoding:              s.Encoding,
-		ServiceType:           s.ServiceType,
-		ModelIpfsHash:         s.ModelIpfsHash,
-		MPEAddress:            s.MpeAddress,
-		URL:                   s.Groups[0].Endpoints[0],
-		Price:                 s.Groups[0].Pricing[0].PriceInCogs,
-		GroupID:               s.Groups[0].GroupID,
-		FreeCalls:             s.Groups[0].FreeCalls,
-		FreeCallSignerAddress: s.Groups[0].FreeCallSignerAddress,
-		Description:           s.ServiceDescription.Description,
-		ShortDescription:      s.ServiceDescription.ShortDescription,
+func (s ServiceMetadata) DB() (db.SnetService, error) {
+	if len(s.Groups) > 0 {
+		if len(s.Groups[0].Endpoints[0]) > 0 && len(s.Groups[0].Pricing) > 0 {
+			return db.SnetService{
+				ID:                    s.ID,
+				SnetID:                s.SnetID,
+				SnetOrgID:             s.SnetOrgID,
+				OrgID:                 s.OrgID,
+				Version:               s.Version,
+				DisplayName:           s.DisplayName,
+				Encoding:              s.Encoding,
+				ServiceType:           s.ServiceType,
+				ModelIpfsHash:         s.ModelIpfsHash,
+				MPEAddress:            s.MpeAddress,
+				URL:                   s.Groups[0].Endpoints[0],
+				Price:                 s.Groups[0].Pricing[0].PriceInCogs,
+				GroupID:               s.Groups[0].GroupID,
+				FreeCalls:             s.Groups[0].FreeCalls,
+				FreeCallSignerAddress: s.Groups[0].FreeCallSignerAddress,
+				Description:           s.ServiceDescription.Description,
+				ShortDescription:      s.ServiceDescription.ShortDescription,
+			}, nil
+		}
 	}
+	return db.SnetService{}, errors.New("no service payment group found")
 }
 
 // Group represents a group within an organization in the blockchain.
 type Group struct {
 	GroupName        string   `json:"group_name"`               // Name of the group.
-	GroupID          string   `json:"group_id"`                 // ID of the group.
+	GroupID          string   `json:"group_id"`                 // Id of the group.
 	PaymentDetails   Payment  `json:"payment"`                  // Payment details for the group.
 	LicenseEndpoints []string `json:"license_server_endpoints"` // License server endpoints.
 }
@@ -111,10 +117,10 @@ type PaymentChannelStorageClient struct {
 
 // ServiceMetadata represents metadata for a service in the blockchain.
 type ServiceMetadata struct {
-	ID            int    // Internal ID.
-	SnetID        string // ID from blockchain.
-	SnetOrgID     string // Organization ID from blockchain.
-	OrgID         int    // Internal organization ID.
+	ID            int    `json:"id"`              // Internal ID.
+	SnetID        string `json:"snetId"`          // ID from blockchain.
+	SnetOrgID     string `json:"snetOrgId"`       // Organization ID from blockchain.
+	OrgID         int    `json:"orgId"`           // Internal organization ID.
 	Version       int    `json:"version"`         // Version of the service.
 	DisplayName   string `json:"display_name"`    // Display name of the service.
 	Encoding      string `json:"encoding"`        // Encoding type of the service.

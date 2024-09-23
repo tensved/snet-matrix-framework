@@ -3,6 +3,7 @@ package ipfsutils
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/kubo/client/rpc"
@@ -10,7 +11,6 @@ import (
 	"github.com/tensved/snet-matrix-framework/internal/config"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -25,14 +25,15 @@ type IPFSClient struct {
 // Returns:
 //   - IPFSClient: An instance of IPFSClient with the configured HTTP client.
 func Init() IPFSClient {
+	duration := 5 * time.Second
 	httpClient := http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: duration,
 	}
-	ifpsClient, err := rpc.NewURLApiWithClient(config.IPFS.IPFSProviderURL, &httpClient)
+	ipfsClient, err := rpc.NewURLApiWithClient(config.IPFS.IPFSProviderURL, &httpClient)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Connection failed to IPFS")
+		log.Fatal().Err(err).Msg("connection failed to IPFS")
 	}
-	return IPFSClient{ifpsClient}
+	return IPFSClient{ipfsClient}
 }
 
 // ReadFilesCompressed reads all files from a compressed tar archive and returns them as a map.
@@ -43,38 +44,38 @@ func Init() IPFSClient {
 // Returns:
 //   - protofiles: A map where keys are file names and values are file contents.
 //   - err: An error if the operation fails.
-func ReadFilesCompressed(compressedFile string) (protofiles map[string][]byte, err error) {
+func ReadFilesCompressed(compressedFile string) (map[string][]byte, error) {
 	f := strings.NewReader(compressedFile)
 	tarReader := tar.NewReader(f)
-	protofiles = map[string][]byte{}
+	protoFiles := map[string][]byte{}
 	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to get organizations")
+			log.Error().Err(err).Msg("failed to get organizations")
 			return nil, err
 		}
 		name := header.Name
 		switch header.Typeflag {
 		case tar.TypeDir:
-			log.Debug().Any("dir_name", name).Msg("Directory Name")
+			log.Debug().Any("dir_name", name).Msg("directory name")
 		case tar.TypeReg:
 			data := make([]byte, header.Size)
-			_, err := tarReader.Read(data)
-			if err != nil && err != io.EOF {
+			_, err = tarReader.Read(data)
+			if err != nil && !errors.Is(err, io.EOF) {
 				log.Error().Err(err)
 				return nil, err
 			}
-			protofiles[name] = data
+			protoFiles[name] = data
 		default:
-			err = fmt.Errorf("%s : %c %s %s\n", "Unknown file Type", header.Typeflag, "in file", name)
+			err = fmt.Errorf("unknown file type: %c %s %s", header.Typeflag, "in file", name)
 			log.Error().Err(err)
 			return nil, err
 		}
 	}
-	return protofiles, nil
+	return protoFiles, nil
 }
 
 // RemoveSpecialCharacters removes all non-alphanumeric characters from the provided hash string.
@@ -85,11 +86,7 @@ func ReadFilesCompressed(compressedFile string) (protofiles map[string][]byte, e
 // Returns:
 //   - string: The cleaned hash string.
 func RemoveSpecialCharacters(hash string) string {
-	reg, err := regexp.Compile("[^a-zA-Z0-9=]")
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to remove special characters from hash")
-	}
-	return reg.ReplaceAllString(hash, "")
+	return config.IPFS.HashCutterRegexp.ReplaceAllString(hash, "")
 }
 
 // GetIpfsFile retrieves a file from IPFS using the provided hash.
@@ -100,52 +97,54 @@ func RemoveSpecialCharacters(hash string) string {
 // Returns:
 //   - content: A byte slice containing the file content.
 //   - err: An error if the operation fails.
-func (ipfsClient IPFSClient) GetIpfsFile(hash string) (content []byte, err error) {
+func (ipfsClient IPFSClient) GetIpfsFile(hash string) ([]byte, error) {
 	hash = strings.TrimPrefix(hash, "ipfs://")
 	hash = RemoveSpecialCharacters(hash)
 
 	cID, err := cid.Parse(hash)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to parse CID")
-		return
+		log.Error().Err(err).Msg("failed to parse CID")
+		return nil, err
 	}
 
 	req := ipfsClient.Request("cat", cID.String())
-	resp, err := req.Send(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := req.Send(ctx)
 	defer func(resp *rpc.Response) {
 		err = resp.Close()
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to close resp, got error")
+			log.Error().Err(err).Msg("failed to close resp, got error")
 		}
 	}(resp)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get content, got error")
-		return
+		log.Error().Err(err).Msg("failed to get content, got error")
+		return nil, err
 	}
 	if resp == nil {
-		log.Error().Msg("Failed to get content, response is nil")
-		return
+		log.Error().Msg("failed to get content, response is nil")
+		return nil, err
 	}
 	if resp.Error != nil {
-		log.Error().Err(resp.Error).Msg("Failed to get content, got error")
-		return
+		log.Error().Err(resp.Error).Msg("failed to get content, got error")
+		return nil, err
 	}
 	fileContent, err := io.ReadAll(resp.Output)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to read content, got error")
-		return
+		log.Error().Err(err).Msg("failed to read content, got error")
+		return nil, err
 	}
 
 	// Create a CID manually to check CID.
 	_, c, err := cid.CidFromBytes(append(cID.Bytes(), fileContent...))
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to parse CID")
-		return
+		log.Error().Err(err).Msg("failed to parse CID")
+		return nil, err
 	}
 
-	// To test if two CIDs are equivalent, be sure to use the 'Equals' method.
+	// To test if two CIDs are equal, be sure to use the 'Equals' method.
 	if !c.Equals(cID) {
-		log.Error().Msg("CIDs not equal!")
+		log.Error().Msg("CIDs are not equal")
 	}
 
 	return fileContent, err

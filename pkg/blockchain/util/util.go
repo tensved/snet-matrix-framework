@@ -1,15 +1,22 @@
 package util
 
 import (
+	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
+	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"math/big"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // EstimateGas returns a new bind.TransactOpts instance with zero gas limit
@@ -21,7 +28,7 @@ import (
 // Returns:
 //   - opts: A pointer to a new bind.TransactOpts with the same From and Signer values as the wallet,
 //     but with a nil Value and a GasLimit of 0.
-func EstimateGas(wallet *bind.TransactOpts) (opts *bind.TransactOpts) {
+func EstimateGas(wallet *bind.TransactOpts) *bind.TransactOpts {
 	return &bind.TransactOpts{
 		From:     wallet.From,
 		Signer:   wallet.Signer,
@@ -38,7 +45,7 @@ func EstimateGas(wallet *bind.TransactOpts) (opts *bind.TransactOpts) {
 //
 // Returns:
 //   - signature: A byte slice containing the generated signature.
-func GetSignature(message []byte, privateKeyECDSA *ecdsa.PrivateKey) (signature []byte) {
+func GetSignature(message []byte, privateKeyECDSA *ecdsa.PrivateKey) []byte {
 	hash := crypto.Keccak256(
 		blockchain.HashPrefix32Bytes,
 		crypto.Keccak256(message),
@@ -46,7 +53,7 @@ func GetSignature(message []byte, privateKeyECDSA *ecdsa.PrivateKey) (signature 
 
 	signature, err := crypto.Sign(hash, privateKeyECDSA)
 	if err != nil {
-		panic(fmt.Sprintf("Cannot sign message: %v", err))
+		panic(fmt.Sprintf("cannot sign message: %v", err))
 	}
 
 	return signature
@@ -72,12 +79,13 @@ func BigIntToBytes(value *big.Int) []byte {
 //   - agix: A pointer to a big.Int representing the equivalent COG amount.
 //   - err: An error if the conversion fails.
 func AgixToCog(iamount any) (agix *big.Int, err error) {
+	base := 10
 	amount := decimal.NewFromFloat(0)
 	switch v := iamount.(type) {
 	case string:
 		amount, err = decimal.NewFromString(v)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to convert string to decimal")
+			log.Error().Err(err).Msg("failed to convert string to decimal")
 			return nil, err
 		}
 	case float64:
@@ -89,16 +97,16 @@ func AgixToCog(iamount any) (agix *big.Int, err error) {
 	case *decimal.Decimal:
 		amount = *v
 	default:
-		log.Fatal().Msg("Unsupported type")
+		log.Fatal().Msg("unsupported type")
 	}
-
-	mul := decimal.NewFromFloat(float64(10)).Pow(decimal.NewFromFloat(8))
+	dec, pow := float64(10), float64(8)
+	mul := decimal.NewFromFloat(dec).Pow(decimal.NewFromFloat(pow))
 	result := amount.Mul(mul)
 
 	agix = new(big.Int)
-	agix.SetString(result.String(), 10)
+	agix.SetString(result.String(), base)
 
-	return agix, err
+	return
 }
 
 // CogToAgix converts a COG amount to its equivalent in AGIX.
@@ -110,24 +118,147 @@ func AgixToCog(iamount any) (agix *big.Int, err error) {
 //   - decimal.Decimal: The equivalent AGIX amount as a decimal.Decimal.
 func CogToAgix(ivalue any) decimal.Decimal {
 	value := new(big.Int)
+	base := 10
 	switch v := ivalue.(type) {
 	case string:
-		value.SetString(v, 10)
+		value.SetString(v, base)
 	case *big.Int:
 		value = v
 	case int:
 		value.SetInt64(int64(v))
 	default:
-		log.Error().Msg("Unsupported type")
+		log.Error().Msg("unsupported type")
 		return decimal.Zero
 	}
-
-	mul := decimal.NewFromFloat(float64(10)).Pow(decimal.NewFromFloat(8))
+	dec, pow := float64(10), float64(8)
+	mul := decimal.NewFromFloat(dec).Pow(decimal.NewFromFloat(pow))
 	num, err := decimal.NewFromString(value.String())
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to convert string to decimal")
+		log.Error().Err(err).Msg("failed to convert string to decimal")
 	}
-	result := num.DivRound(mul, 8)
+	precision := int32(8)
+	result := num.DivRound(mul, precision)
 
 	return result
+}
+
+func DecodePaymentGroupID(encoded string) ([32]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	var groupID [32]byte
+	copy(groupID[:], decoded)
+	return groupID, nil
+}
+
+func GetCallOpts(fromAddress common.Address, lastBlockNumber *big.Int) *bind.CallOpts {
+	return &bind.CallOpts{
+		Pending:     false,
+		From:        fromAddress,
+		BlockNumber: lastBlockNumber,
+		BlockHash:   common.Hash{},
+		Context:     context.Background(),
+	}
+}
+
+func GetWatchOpts(lastBlockNumber *big.Int) *bind.WatchOpts {
+	startBlock := lastBlockNumber.Uint64()
+	return &bind.WatchOpts{
+		Start:   &startBlock,
+		Context: context.Background(),
+	}
+}
+
+func GetFilterOpts(lastBlockNumber *big.Int) *bind.FilterOpts {
+	start := uint64(0)
+	end := lastBlockNumber.Uint64()
+	return &bind.FilterOpts{
+		Start:   start,
+		End:     &end,
+		Context: context.Background(),
+	}
+}
+
+func GetTransactOpts(privateKeyECDSA *ecdsa.PrivateKey) *bind.TransactOpts {
+	chainID, _ := strconv.Atoi(config.Blockchain.ChainID)
+	opts, err := bind.NewKeyedTransactorWithChainID(privateKeyECDSA, big.NewInt(int64(chainID)))
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create transactor")
+	}
+	return opts
+}
+
+func GetNewExpiration(lastBlockNumber, paymentExpirationThreshold *big.Int) *big.Int {
+	offset := int64(240)
+	blockOffset := big.NewInt(offset)
+	defaultExpiration := new(big.Int).Add(lastBlockNumber, paymentExpirationThreshold)
+	return new(big.Int).Add(defaultExpiration, blockOffset)
+}
+
+func RemoveProtocol(rawURL string) (string, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimPrefix(rawURL, parsedURL.Scheme+"://"), nil
+}
+
+func WaitingForChannelToOpen(channelOpens <-chan *blockchain.MultiPartyEscrowChannelOpen, errChan <-chan error, timeout time.Duration) *big.Int {
+	select {
+	case openEvent := <-channelOpens:
+		log.Debug().Msgf("channel opened: %+v", openEvent)
+		return openEvent.ChannelId
+	case err := <-errChan:
+		log.Error().Err(err).Msgf("error watching for OpenChannel: %v", err)
+	case <-time.After(timeout):
+		log.Error().Msg("timed out waiting for OpenChannel to complete")
+	}
+	return nil
+}
+
+func WaitingForChannelToExtend(channelExtends <-chan *blockchain.MultiPartyEscrowChannelExtend, errChan <-chan error, timeout time.Duration) *big.Int {
+	select {
+	case extendEvent := <-channelExtends:
+		log.Debug().Msgf("channel extended: %+v", extendEvent)
+		return extendEvent.ChannelId
+	case err := <-errChan:
+		log.Error().Err(err).Msgf("error watching for ChannelExtend: %v", err)
+	case <-time.After(timeout):
+		log.Error().Msg("timed out waiting for ChannelExtend to complete")
+	}
+	return nil
+}
+
+func WaitingForChannelFundsToBeAdded(channelAddFunds <-chan *blockchain.MultiPartyEscrowChannelAddFunds, errChan <-chan error, timeout time.Duration) *big.Int {
+	select {
+	case addFundsEvent := <-channelAddFunds:
+		log.Debug().Msgf("channel funds added: %+v", addFundsEvent)
+		return addFundsEvent.ChannelId
+	case err := <-errChan:
+		log.Error().Err(err).Msgf("error watching for ChannelExtendAndAddFunds: %v", err)
+	case <-time.After(timeout):
+		log.Error().Msg("timed out waiting for ChannelExtendAndAddFunds to complete")
+	}
+	return nil
+}
+
+func WaitingToDepositFundsToMPE(channelDepositFunds <-chan *blockchain.MultiPartyEscrowDepositFunds, errChan <-chan error, timeout time.Duration) bool {
+	select {
+	case depositFundsEvent := <-channelDepositFunds:
+		log.Debug().Msgf("deposited to MPE: %+v", depositFundsEvent)
+		return true
+	case err := <-errChan:
+		log.Error().Err(err).Msgf("error watching for deposit: %v", err)
+	case <-time.After(timeout):
+		log.Error().Msg("timed out waiting for deposit to complete")
+	}
+	return false
+}
+
+func IsChannelValid(filteredEvent *blockchain.MultiPartyEscrowChannelOpen, bigIntPrice *big.Int, newExpiration *big.Int) (bool, bool) {
+	hasSufficientFunds := filteredEvent.Amount.Cmp(bigIntPrice) >= 0
+	isValidExpiration := filteredEvent.Expiration.Cmp(newExpiration) > 0
+	return hasSufficientFunds, isValidExpiration
 }
