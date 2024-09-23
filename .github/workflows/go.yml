@@ -88,6 +88,9 @@ jobs:
         with:
           go-version: '1.22.5'
 
+      - name: install dependencies
+        run: go mod download
+
       - name: install golangci-lint
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.52.2
