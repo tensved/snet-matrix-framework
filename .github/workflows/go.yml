@@ -94,6 +94,25 @@ jobs:
       - name: install dependencies
         run: sudo apt update && sudo apt install libsnmp-dev
 
+      - name: install dependencies
+        run: |
+          go mod tidy
+          go mod download
+
+      - name: protobuf install
+        run: |
+          sudo apt update
+          sudo apt install protobuf-compiler
+
+      - name: go install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+      - name: go install protoc-gen-go-grpc
+        run: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: generate code
+        run: go generate ./...
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
