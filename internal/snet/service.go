@@ -333,7 +333,7 @@ func (h *Handler) getSignatureToGetChannelStateFromDaemon(channelID, lastBlockNu
 		[]byte(prefixGetChannelState),
 		h.ETH.MPEAddress.Bytes(),
 		util.BigIntToBytes(channelID),
-		math.U256Bytes(big.NewInt(int64(lastBlockNumber.Uint64()))),
+		math.U256Bytes(lastBlockNumber),
 	}, nil)
 
 	signature := util.GetSignature(message, privateKeyECDSA)
