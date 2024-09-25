@@ -524,7 +524,7 @@ func (h *Handler) selectPaymentChannel(openedChannel *blockchain.MultiPartyEscro
 	tokenContract := bind.NewBoundContract(tokenAddress, tokenABI, client, client, client)
 
 	amount := new(big.Int)
-	amount.SetString("1000000000000000000", 10) // Например, 1 токен с 18 знаками после запятой
+	amount.SetString("1000000000000000000", 10)
 
 	privateKeyECDSA, err := crypto.HexToECDSA(config.Blockchain.AdminPrivateKey)
 	if err != nil {
