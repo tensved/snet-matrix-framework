@@ -21,22 +21,12 @@ jobs:
         with:
           go-version: '1.22.5'
 
-      - name: cache go modules
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/go-build
-            /go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
       - name: install dependencies
         run: |
           go mod tidy
           go mod download
 
-      - name: protobuff install
+      - name: protobuf install
         run: |
           sudo apt update
           sudo apt install protobuf-compiler
@@ -65,22 +55,12 @@ jobs:
         with:
           go-version: '1.22.5'
 
-      - name: cache go modules
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/go-build
-            /go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
       - name: install dependencies
         run: |
           go mod tidy
           go mod download
 
-      - name: protobuff install
+      - name: protobuf install
         run: |
           sudo apt update
           sudo apt install protobuf-compiler
@@ -104,35 +84,12 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    needs: build
-
     steps:
-      - name: clone repo
-        uses: actions/checkout@v3
-
-      - name: set up go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.22.5'
-
-      - name: cache go modules
-        uses: actions/cache@v3
+            go-version: stable
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
         with:
-          path: |
-            ~/.cache/go-build
-            /go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: install dependencies
-        run: |
-          go mod tidy
-          go mod download
-
-      - name: install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.52.2
-
-      - name: run golangci-lint
-        run: golangci-lint run ./...
+          version: v1.60
