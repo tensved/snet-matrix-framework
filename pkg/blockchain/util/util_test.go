@@ -1,7 +1,8 @@
-package util
+package util_test
 
 import (
 	"github.com/rs/zerolog/log"
+	"github.com/tensved/snet-matrix-framework/pkg/blockchain/util"
 	"math/big"
 	"testing"
 )
@@ -19,8 +20,8 @@ func TestAgixToCog(t *testing.T) {
 
 	rr, isOK := new(big.Int).SetString("1111100000000", 10)
 	if !isOK {
-		t.Error("Failed to cast to big.Int")
-		log.Error().Msg("Failed to cast to big.Int")
+		t.Error("failed to cast to big.Int")
+		log.Error().Msg("failed to cast to big.Int")
 		return
 	}
 
@@ -40,7 +41,7 @@ func TestAgixToCog(t *testing.T) {
 	}
 
 	for _, pair := range tests {
-		resultAgix, err := AgixToCog(pair.value)
+		resultAgix, err := util.AgixToCog(pair.value)
 		if resultAgix == nil || err != nil {
 			t.Error("Expected", pair.expectedResult, "got", resultAgix.String())
 			return
@@ -75,7 +76,7 @@ func TestCogToAgix(t *testing.T) {
 	}
 
 	for _, pair := range tests {
-		result := CogToAgix(pair.value)
+		result := util.CogToAgix(pair.value)
 		if result.String() != pair.expectedResult {
 			t.Error("Expected", pair.expectedResult, "got", result.String())
 			return

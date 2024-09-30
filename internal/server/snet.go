@@ -16,8 +16,8 @@ import (
 func (s *FiberServer) GetServices(c *fiber.Ctx) error {
 	services, err := s.db.GetSnetServices()
 	if err != nil {
-		log.Error().Err(err).Msg("Cannot get services")
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to retrieve services")
+		log.Error().Err(err).Msg("cannot get services")
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to retrieve services")
 	}
 	return c.JSON(services)
 }
@@ -33,8 +33,8 @@ func (s *FiberServer) GetServices(c *fiber.Ctx) error {
 func (s *FiberServer) GetOrgs(c *fiber.Ctx) error {
 	orgs, err := s.db.GetSnetOrgs()
 	if err != nil {
-		log.Error().Err(err).Msg("Cannot get orgs")
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to retrieve organizations")
+		log.Error().Err(err).Msg("cannot get orgs")
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to retrieve organizations")
 	}
 	return c.JSON(orgs)
 }

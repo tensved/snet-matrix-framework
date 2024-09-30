@@ -1,7 +1,4 @@
-# 
-
-<!-- PROJECT LOGO -->
-<br />
+#
 <div align="center">
 
 <h3 align="center">snet-matrix-framework</h3>
@@ -63,6 +60,7 @@ The snet-matrix-framework is designed to create bots that will connect the messe
 - APP_PORT – port number on which the application will run
 - PRODUCTION – flag indicating whether the application is running in production mode
 - DOMAIN – your domain for the client application that provides the payment gateway
+- PAYMENT_TIMEOUT – time to pay for the service call
 
 #### Matrix
 - MATRIX_HOMESERVER_URL – URL of the Matrix homeserver

@@ -15,16 +15,16 @@ import (
 //
 // Returns:
 //   - error: An error if the operation fails.
-func (s *FiberServer) GetPaymentState(c *fiber.Ctx) (err error) {
+func (s *FiberServer) GetPaymentState(c *fiber.Ctx) error {
 	paymentUUID, err := uuid.Parse(c.Query("id"))
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to parse uuid")
-		return c.Status(fiber.StatusBadRequest).SendString("Failed to parse uuid")
+		log.Error().Err(err).Msg("failed to parse uuid")
+		return c.Status(fiber.StatusBadRequest).SendString("failed to parse uuid")
 	}
 	p, err := s.db.GetPaymentState(paymentUUID)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get payment state")
-		return c.Status(fiber.StatusBadRequest).SendString("Failed to get payment state")
+		log.Error().Err(err).Msg("failed to get payment state")
+		return c.Status(fiber.StatusBadRequest).SendString("failed to get payment state")
 	}
 	return c.JSON(fiber.Map{
 		"data": p,
@@ -42,13 +42,13 @@ func (s *FiberServer) GetPaymentState(c *fiber.Ctx) (err error) {
 func (s *FiberServer) PatchUpdatePaymentState(c *fiber.Ctx) error {
 	var input db.PaymentState
 	if err := c.BodyParser(&input); err != nil {
-		log.Error().Err(err).Msg("Failed to parse request body")
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid input")
+		log.Error().Err(err).Msg("failed to parse request body")
+		return c.Status(fiber.StatusBadRequest).SendString("invalid input")
 	}
 
 	if err := s.db.PatchUpdatePaymentState(&input); err != nil {
-		log.Error().Err(err).Msg("Failed to update payment state")
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to update payment state")
+		log.Error().Err(err).Msg("failed to update payment state")
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to update payment state")
 	}
 
 	return c.SendStatus(fiber.StatusOK)

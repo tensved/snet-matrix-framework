@@ -13,24 +13,23 @@ import (
 var (
 	// HashPrefix32Bytes is an Ethereum signature prefix: see https://github.com/ethereum/go-ethereum/blob/bf468a81ec261745b25206b2a596eb0ee0a24a74/internal/ethapi/api.go#L361
 	HashPrefix32Bytes = []byte("\x19Ethereum Signed Message:\n32")
-	hashPrefix42Bytes = []byte("\x19Ethereum Signed Message:\n420x")
 )
 
 const (
 	PrefixInSignature = "__MPE_claim_message"
-	//Agreed constant value
+	// Agreed constant value.
 	FreeCallPrefixSignature = "__prefix_free_trial"
-	//Agreed constant value
+	// Agreed constant value.
 	AllowedUserPrefixSignature = "__authorized_user"
 	// PaymentTypeHeader is a type of payment used to pay for an RPC call.
 	// Supported types are: "escrow".
-	// Note: "job" Payment type is deprecated
+	// Note: "job" Payment type is deprecated.
 	PaymentTypeHeader = "snet-payment-type"
-	//Client that calls the Daemon ( example can be "snet-cli","snet-dapp","snet-sdk")
+	// Client that calls the Daemon ( example can be "snet-cli","snet-dapp","snet-sdk").
 	ClientTypeHeader = "snet-client-type"
-	//Value is a user address , example "0x94d04332C4f5273feF69c4a52D24f42a3aF1F207"
+	// Value is a user address , example "0x94d04332C4f5273feF69c4a52D24f42a3aF1F207".
 	UserInfoHeader = "snet-user-info"
-	//User Agent details set in on the server stream info
+	// User Agent details set in on the server stream info.
 	UserAgentHeader = "user-agent"
 	// PaymentChannelIDHeader is a MultiPartyEscrow contract payment channel
 	// id. Value is a string containing a decimal number.
@@ -53,21 +52,21 @@ const (
 	// id. Value is a string containing a decimal number.
 	PaymentMultiPartyEscrowAddressHeader = "snet-payment-mpe-address"
 
-	//Added for free call support in Daemon
+	// Added for free call support in Daemon.
 
-	//The user Id of the person making the call
+	// The user Id of the person making the call.
 	FreeCallUserIdHeader = "snet-free-call-user-id"
 
-	//Will be used to check if the Signature is still valid
+	// Will be used to check if the Signature is still valid.
 	CurrentBlockNumberHeader = "snet-current-block-number"
 
-	//Place holder to set the free call Auth Token issued
+	// Place holder to set the free call Auth Token issued.
 	FreeCallAuthTokenHeader = "snet-free-call-auth-token-bin"
-	//Block number on when the Token was issued , to track the expiry of the token , which is ~ 1 Month
+	// Block number on when the Token was issued , to track the expiry of the token , which is ~ 1 Month.
 	FreeCallAuthTokenExpiryBlockNumberHeader = "snet-free-call-token-expiry-block"
 
-	//Users may decide to sign upfront and make calls .Daemon generates and Auth Token
-	//Users/Clients will need to use this token to make calls for the amount signed upfront.
+	// Users may decide to sign upfront and make calls .Daemon generates and Auth Token
+	// Users/Clients will need to use this token to make calls for the amount signed upfront.
 	PrePaidAuthTokenHeader = "snet-prepaid-auth-token-bin"
 
 	DynamicPriceDerived = "snet-derived-dynamic-price-cost"
@@ -96,21 +95,21 @@ func Init() (e Ethereum) {
 	log.Debug().Any("ETH_URL", config.Blockchain.EthProviderURL).Msg("ETH_URL")
 	e.Client, err = ethclient.Dial(config.Blockchain.EthProviderURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to blockchain via HTTPS")
+		log.Fatal().Err(err).Msg("failed to connect to blockchain via HTTPS")
 	}
 	e.WSSClient, err = ethclient.Dial(config.Blockchain.EthProviderWSURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to blockchain via WSS")
+		log.Fatal().Err(err).Msg("failed to connect to blockchain via WSS")
 	}
 	err = e.InitRegistry()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to init registry")
+		log.Fatal().Err(err).Msg("failed to init registry")
 	}
 	err = e.InitMPE()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to init MPE")
+		log.Fatal().Err(err).Msg("failed to init MPE")
 	}
-	return e
+	return
 }
 
 // networks represents a mapping of network names to their respective addresses.
@@ -127,14 +126,14 @@ func (eth *Ethereum) InitRegistry() (err error) {
 	var n networks
 	err = json.Unmarshal(networksRaw, &n)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal")
+		log.Error().Err(err).Msg("failed to unmarshal")
 		return
 	}
 	registryAddress := n[config.Blockchain.ChainID].Address
-	log.Debug().Msgf("registryAddress: %s", registryAddress)
+	log.Debug().Msgf("registry address: %s", registryAddress)
 	eth.Registry, err = NewRegistry(common.HexToAddress(registryAddress), eth.Client)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to init registry smart contract")
+		log.Fatal().Err(err).Msg("failed to init registry smart contract")
 	}
 	return
 }
@@ -148,19 +147,19 @@ func (eth *Ethereum) InitMPE() (err error) {
 	networksRaw := contracts.GetNetworks(contracts.MultiPartyEscrow)
 	err = json.Unmarshal(networksRaw, &n)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal")
+		log.Error().Err(err).Msg("failed to unmarshal")
 		return
 	}
 	address := n[config.Blockchain.ChainID].Address
 	log.Debug().Msgf("MPE address: %s", address)
 	eth.MPE, err = NewMultiPartyEscrow(common.HexToAddress(address), eth.WSSClient)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to init MPE")
+		log.Fatal().Err(err).Msg("failed to init MPE")
 	}
 	eth.MPEAddress = common.HexToAddress(address)
 	callOpts := &bind.CallOpts{}
 	tokenAddress, _ := eth.MPE.Token(callOpts)
-	log.Debug().Msgf("Token address: %s", tokenAddress)
+	log.Debug().Msgf("token address: %s", tokenAddress)
 
 	return
 }
@@ -173,7 +172,8 @@ func (eth *Ethereum) InitMPE() (err error) {
 func (eth Ethereum) GetOrgs() (orgsIDs [][32]byte, err error) {
 	orgsIDs, err = eth.Registry.ListOrganizations(nil)
 	if err != nil {
-		log.Debug().Err(err).Msg("Failed to GetOrgs")
+		log.Debug().Err(err).Msg("failed to get orgs")
+		return nil, err
 	}
 	return
 }
@@ -199,7 +199,7 @@ type Org struct {
 func (eth Ethereum) GetOrg(orgID [32]byte) (org Org, err error) {
 	org, err = eth.Registry.GetOrganizationById(nil, orgID)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to GetOrg")
+		log.Error().Err(err).Msg("failed to get org")
 		return
 	}
 	return
@@ -224,7 +224,8 @@ type Service struct {
 func (eth Ethereum) GetService(orgID, serviceID [32]byte) (service Service, err error) {
 	service, err = eth.Registry.GetServiceRegistrationById(nil, orgID, serviceID)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get service from blockchain")
+		log.Error().Err(err).Msg("failed to get service from blockchain")
+		return Service{}, err
 	}
 	return
 }
