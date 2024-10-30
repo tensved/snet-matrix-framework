@@ -1,4 +1,3 @@
-#
 <div align="center">
 
 <h3 align="center">snet-matrix-framework</h3>
@@ -6,7 +5,7 @@
   <p align="center">
     ai-bots based on the Matrix protocol and snet ecosystem
     <br />
-    <a href="https://github.com/tensved/snet-matrix-framework"><strong>Explore the docs »</strong></a>
+    <a href="https://snet-matrix-framework.gitbook.io/snet-matrix-framework"><strong>Explore the docs »</strong></a>
     <br />
     <br />
     <a href="https://github.com/tensved/snet-matrix-framework">View Demo</a>
