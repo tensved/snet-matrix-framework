@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
+	"strings"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/snet-matrix-framework/internal/config"
-	"math/big"
-	"strings"
-	"time"
 )
 
 // postgres wraps the pgxpool.Pool to provide additional methods.
@@ -87,6 +88,7 @@ func New() Service {
 			encoding     				TEXT DEFAULT '',
 			service_type        		TEXT NOT NULL DEFAULT '',
 			model_ipfs_hash     		TEXT NOT NULL DEFAULT '',
+			service_api_source  		TEXT NOT NULL DEFAULT '',
 			mpe_address 				TEXT NOT NULL DEFAULT '',
 			url 						TEXT NOT NULL DEFAULT '',
 			price 						INTEGER not null DEFAULT 0,
@@ -116,6 +118,14 @@ func New() Service {
 			);
 
 	CREATE EXTENSION IF NOT EXISTS pgcrypto;
+	
+	-- Add service_api_source column if it doesn't exist
+	DO $$ 
+	BEGIN 
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'snet_services' AND column_name = 'service_api_source') THEN
+			ALTER TABLE snet_services ADD COLUMN service_api_source TEXT NOT NULL DEFAULT '';
+		END IF;
+	END $$;
 `)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create tables")
@@ -125,7 +135,7 @@ func New() Service {
 	return &postgres{pool}
 }
 
-// Health checks the health of the database connection.
+// Deprecated: Health checks the health of the database connection.
 //
 // Returns:
 //   - A map with a health status message.
@@ -160,8 +170,8 @@ func (p *postgres) CreateSnetService(s SnetService) (int, error) {
 	row := p.Pool.QueryRow(ctx,
 		`
 			INSERT INTO snet_services
-   			(snet_id, snet_org_id, org_id, version, displayname, encoding , service_type, model_ipfs_hash, mpe_address, url, price, group_id, free_calls, free_call_signer_address, short_description, description) 
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+   			(snet_id, snet_org_id, org_id, version, displayname, encoding , service_type, model_ipfs_hash, service_api_source, mpe_address, url, price, group_id, free_calls, free_call_signer_address, short_description, description) 
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			ON CONFLICT (snet_id)
 			DO UPDATE SET
 			    snet_id=EXCLUDED.snet_id,
@@ -172,6 +182,7 @@ func (p *postgres) CreateSnetService(s SnetService) (int, error) {
 				encoding=EXCLUDED.encoding,
 				service_type=EXCLUDED.service_type,
 				model_ipfs_hash=EXCLUDED.model_ipfs_hash,
+				service_api_source=EXCLUDED.service_api_source,
 				mpe_address=EXCLUDED.mpe_address,
 				url=EXCLUDED.url,
 				price=EXCLUDED.price,
@@ -181,7 +192,7 @@ func (p *postgres) CreateSnetService(s SnetService) (int, error) {
 				short_description=EXCLUDED.short_description,
 				description=EXCLUDED.description
 			RETURNING id`,
-		s.SnetID, s.SnetOrgID, s.OrgID, s.Version, s.DisplayName, s.Encoding, s.ServiceType, s.ModelIpfsHash, s.MPEAddress, s.URL, s.Price, s.GroupID, s.FreeCalls, s.FreeCallSignerAddress, s.ShortDescription, s.Description)
+		s.SnetID, s.SnetOrgID, s.OrgID, s.Version, s.DisplayName, s.Encoding, s.ServiceType, s.ModelIpfsHash, s.ServiceApiSource, s.MPEAddress, s.URL, s.Price, s.GroupID, s.FreeCalls, s.FreeCallSignerAddress, s.ShortDescription, s.Description)
 	var id int
 	err := row.Scan(&id)
 	if err != nil {
@@ -294,7 +305,7 @@ func (p *postgres) GetSnetOrgGroup(groupID string) (SnetOrgGroup, error) {
 	return g, nil
 }
 
-// GetSnetServices retrieves a list of snet services from the database.
+// Deprecated: GetSnetServices retrieves a list of snet services from the database.
 //
 // Returns:
 //   - services: A slice of SnetService instances.
@@ -313,7 +324,7 @@ func (p *postgres) GetSnetServices() ([]SnetService, error) {
 	return services, nil
 }
 
-// GetSnetOrgs retrieves a list of snet organizations from the database.
+// Deprecated: GetSnetOrgs retrieves a list of snet organizations from the database.
 //
 // Returns:
 //   - orgs: A slice of SnetOrganization instances.
@@ -343,17 +354,23 @@ func (p *postgres) GetSnetOrgs() ([]SnetOrganization, error) {
 func (p *postgres) GetSnetService(snetID string) (*SnetService, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s := &SnetService{}
-	row := p.Pool.QueryRow(ctx, "SELECT * FROM snet_services WHERE snet_id=$1 AND deleted_at is NULL", snetID)
-	err := row.Scan(&s.ID, &s.SnetID, &s.SnetOrgID, &s.OrgID, &s.Version, &s.DisplayName, &s.Encoding, &s.ServiceType, &s.ModelIpfsHash, &s.MPEAddress, &s.URL, &s.Price, &s.GroupID, &s.FreeCalls, &s.FreeCallSignerAddress, &s.ShortDescription, &s.Description, &s.CreatedAt, &s.UpdatedAt, &s.DeletedAt)
+	rows, err := p.Pool.Query(ctx, "SELECT * FROM snet_services WHERE snet_id=$1 AND deleted_at is NULL", snetID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errors.New("no snet service found with given id")
-		}
 		return nil, err
 	}
-	log.Debug().Msgf("retrieved snet service: %+v", s)
-	return s, nil
+	defer rows.Close()
+
+	services, err := pgx.CollectRows(rows, pgx.RowToStructByNameLax[SnetService])
+	if err != nil {
+		return nil, err
+	}
+
+	if len(services) == 0 {
+		return nil, errors.New("no snet service found with given id")
+	}
+
+	log.Debug().Msgf("retrieved snet service: %+v", services[0])
+	return &services[0], nil
 }
 
 // CreatePaymentState creates a new payment state in the database.
@@ -364,6 +381,8 @@ func (p *postgres) GetSnetService(snetID string) (*SnetService, error) {
 // Returns:
 //   - id: The UUID of the created payment state.
 //   - error: An error if the operation fails.
+//
+// Deprecated: CreatePaymentState creates a new payment state in the database.
 func (p *postgres) CreatePaymentState(ps *PaymentState) (uuid.UUID, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -377,7 +396,7 @@ func (p *postgres) CreatePaymentState(ps *PaymentState) (uuid.UUID, error) {
 	return id, nil
 }
 
-// GetPaymentStateByKey retrieves a payment state from the database using a key.
+// Deprecated: GetPaymentStateByKey retrieves a payment state from the database using a key.
 //
 // Parameters:
 //   - key: The key to retrieve the payment state.
@@ -402,7 +421,7 @@ func (p *postgres) GetPaymentStateByKey(key string) (*PaymentState, error) {
 	return ps, nil
 }
 
-// GetPaymentState retrieves a payment state from the database using an Id.
+// Deprecated: GetPaymentState retrieves a payment state from the database using an Id.
 //
 // Parameters:
 //   - id: The UUID of the payment state to retrieve.
@@ -427,7 +446,7 @@ func (p *postgres) GetPaymentState(id uuid.UUID) (*PaymentState, error) {
 	return ps, nil
 }
 
-// PatchUpdatePaymentState updates specific fields of a payment state in the database.
+// Deprecated: PatchUpdatePaymentState updates specific fields of a payment state in the database.
 //
 // Parameters:
 //   - ps: An instance of PaymentState containing the fields to update.

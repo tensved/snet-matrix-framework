@@ -1,7 +1,7 @@
 .venv
 .idea
 .log
-.env
+.env*
 
 # Binaries for programs and plugins
 *.exe
@@ -28,6 +28,7 @@ pkg/blockchain/registry_and_mpe.go
 # certs
 certbot
 
+# macOS
 .DS_Store
 
 # frontend env

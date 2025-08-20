@@ -1,6 +1,9 @@
 package app
 
 import (
+	"regexp"
+
+	"github.com/rs/zerolog/log"
 	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/internal/logger"
@@ -10,7 +13,6 @@ import (
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
 	ipfs "github.com/tensved/snet-matrix-framework/pkg/ipfs"
-	"regexp"
 )
 
 type App struct {
@@ -32,11 +34,26 @@ func New() App {
 	ipfsClient := ipfs.Init()
 	snetSyncer := syncer.New(eth, ipfsClient, database)
 	grpcManager := grpcmanager.NewGRPCClientManager()
-	app := App{DB: database, Fiber: server.New(database), MatrixClient: matrix.New(database, snetSyncer, grpcManager, eth), IPFSClient: ipfsClient, Ethereum: eth, Syncer: snetSyncer, GRPCManager: grpcManager}
+	matrixClient := matrix.New(database, snetSyncer, grpcManager, eth)
+	if matrixClient == nil {
+		log.Error().Msg("failed to create Matrix client")
+	}
+	fiberServer := server.New(database)
+
+	app := App{
+		DB:           database,
+		Fiber:        fiberServer,
+		Ethereum:     eth,
+		MatrixClient: matrixClient,
+		IPFSClient:   ipfsClient,
+		Syncer:       snetSyncer,
+		GRPCManager:  grpcManager,
+	}
 
 	app.Syncer.DB = app.DB
 	app.Syncer.Ethereum = app.Ethereum
 	app.Syncer.IPFSClient = app.IPFSClient
 
+	log.Debug().Msg("application initialization completed successfully")
 	return app
 }
