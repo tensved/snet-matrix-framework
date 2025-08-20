@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
@@ -14,8 +17,6 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
-	"strings"
-	"time"
 )
 
 // Service defines the methods for interacting with the Matrix Synapse server.
@@ -42,22 +43,32 @@ type service struct {
 
 // New creates a new instance of the service and initializes the Matrix client.
 func New(db db.Service, snetSyncer syncer.SnetSyncer, grpcManager *grpcmanager.GRPCClientManager, eth blockchain.Ethereum) Service {
+	logger := log.With().
+		Str("homeserver", config.Matrix.HomeserverURL).
+		Str("username", config.Matrix.Username).
+		Logger()
+
 	client, err := mautrix.NewClient(config.Matrix.HomeserverURL, "", "")
 	if err != nil {
-		log.Error().Err(err).Msg("failed to create Matrix client")
-	}
-	sync, ok := client.Syncer.(*mautrix.DefaultSyncer)
-	if !ok {
-		log.Error().Msg("failed to assert client.Syncer to *mautrix.DefaultSyncer")
+		logger.Error().Err(err).Msg("failed to create Matrix client")
 		return nil
 	}
+
+	sync, ok := client.Syncer.(*mautrix.DefaultSyncer)
+	if !ok {
+		logger.Error().Msg("failed to assert client.Syncer to *mautrix.DefaultSyncer")
+		return nil
+	}
+
 	m := &service{client, context.Background(), sync, time.Now(), db, snetSyncer, grpcManager, eth}
-	log.Debug().Msg("Matrix connect established")
+	logger.Info().Msg("Matrix client created successfully")
 	return m
 }
 
 // Register registers a new user with the given username and password on the Matrix server.
 func (s *service) Register(username, password string) error {
+	logger := log.With().Str("username", username).Logger()
+
 	resp, err := s.Client.RegisterDummy(s.Context, &mautrix.ReqRegister{
 		Username:     username,
 		Password:     password,
@@ -66,15 +77,23 @@ func (s *service) Register(username, password string) error {
 		Type:         "m.login.password",
 	})
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to register Matrix user")
 		return err
 	}
+
 	s.Client.UserID = resp.UserID
 	s.Client.AccessToken = resp.AccessToken
+
+	logger.Info().
+		Str("user_id", string(resp.UserID)).
+		Msg("Matrix user registered successfully")
 	return nil
 }
 
 // Login logs in a user with the given username and password on the Matrix server.
 func (s *service) Login(username, password string) error {
+	logger := log.With().Str("username", username).Logger()
+
 	resp, err := s.Client.Login(s.Context, &mautrix.ReqLogin{
 		Type: "m.login.password",
 		Identifier: mautrix.UserIdentifier{
@@ -84,41 +103,77 @@ func (s *service) Login(username, password string) error {
 		Password: password,
 	})
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to login Matrix user")
 		return err
 	}
+
 	s.Client.UserID = resp.UserID
 	s.Client.AccessToken = resp.AccessToken
+
+	logger.Info().
+		Str("user_id", string(resp.UserID)).
+		Msg("Matrix user logged in successfully")
 	return nil
 }
 
 // GetUserProfile retrieves the profile of a user by their user ID.
 func (s *service) GetUserProfile(userID string) error {
+	logger := log.With().Str("user_id", userID).Logger()
+
 	matrixUserID := id.UserID(userID)
 	_, err := s.Client.GetProfile(s.Context, matrixUserID)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to get Matrix user profile")
 		return err
 	}
+
+	logger.Debug().Msg("Matrix user profile retrieved successfully")
 	return nil
 }
 
 // Auth performs authentication by either logging in or registering the user depending on their existing profile.
 func (s *service) Auth() {
+	logger := log.With().
+		Str("username", config.Matrix.Username).
+		Str("homeserver", config.Matrix.HomeserverURL).
+		Logger()
+
 	userID := fmt.Sprintf("@%s:%s", config.Matrix.Username, config.Matrix.Servername)
 	err := s.GetUserProfile(userID)
 	if err != nil {
+		logger.Info().
+			Str("user_id", userID).
+			Err(err).
+			Msg("user profile not found, attempting registration")
 		err = s.Register(config.Matrix.Username, config.Matrix.Password)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to auth")
+			logger.Error().
+				Err(err).
+				Str("username", config.Matrix.Username).
+				Msg("failed to register user during auth")
 			return
 		}
-		log.Error().Err(err)
+		logger.Info().
+			Str("username", config.Matrix.Username).
+			Msg("user registered successfully during auth")
 	} else {
+		logger.Info().
+			Str("user_id", userID).
+			Msg("user profile found, attempting login")
 		err = s.Login(config.Matrix.Username, config.Matrix.Password)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to auth")
+			logger.Error().
+				Err(err).
+				Str("username", config.Matrix.Username).
+				Msg("failed to login user during auth")
 			return
 		}
+		logger.Info().
+			Str("username", config.Matrix.Username).
+			Msg("user logged in successfully during auth")
 	}
+
+	logger.Info().Msg("Matrix authentication completed successfully")
 }
 
 // isReply checks if the event is a reply to another event.
@@ -175,11 +230,29 @@ func ExtractTexts(formattedBody string) (originalText, replyText string, err err
 
 // SendMessage sends a text message to the specified room on the Matrix server.
 func (s *service) SendMessage(roomID id.RoomID, text string) (*mautrix.RespSendEvent, error) {
+	logger := log.With().
+		Str("room_id", string(roomID)).
+		Str("message_length", fmt.Sprintf("%d", len(text))).
+		Logger()
+
 	content := event.MessageEventContent{
 		MsgType:       event.MsgText,
 		Body:          text,
 		Format:        event.FormatHTML,
 		FormattedBody: fmt.Sprintf("<p>%s</p>", text),
 	}
-	return s.Client.SendMessageEvent(s.Context, roomID, event.EventMessage, content)
+
+	resp, err := s.Client.SendMessageEvent(s.Context, roomID, event.EventMessage, content)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Msg("failed to send Matrix message")
+		return nil, err
+	}
+
+	logger.Debug().
+		Str("event_id", string(resp.EventID)).
+		Msg("Matrix message sent successfully")
+
+	return resp, nil
 }

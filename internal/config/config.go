@@ -1,10 +1,11 @@
 package config
 
 import (
+	"regexp"
+
 	"github.com/caarlos0/env/v10"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
-	"regexp"
 )
 
 // Global configuration variables.
@@ -55,6 +56,7 @@ type MatrixConfig struct {
 	Servername    string `env:"MATRIX_SERVERNAME"`     // The server name of the Matrix homeserver.
 	Username      string `env:"MATRIX_BOT_USERNAME"`   // The username of the Matrix bot.
 	Password      string `env:"MATRIX_BOT_PASSWORD"`   // The password of the Matrix bot.
+	PickleKey     string `env:"MATRIX_PICKLE_KEY"`     // The pickle key for crypto operations.
 }
 
 // Init loads environment variables and parses them into the respective configuration structs.
@@ -85,4 +87,6 @@ func Init() {
 	if err := env.Parse(&IPFS); err != nil {
 		log.Error().Err(err)
 	}
+
+	log.Debug().Msg("configuration loading completed")
 }

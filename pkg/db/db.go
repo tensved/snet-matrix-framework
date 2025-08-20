@@ -1,9 +1,10 @@
 package db
 
 import (
-	"github.com/google/uuid"
 	"math/big"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Service defines the interface for database operations related to Snet organizations, services, and payment states.
@@ -49,6 +50,7 @@ type SnetService struct {
 	Encoding              string     `db:"encoding"`                 // The encoding type of the service.
 	ServiceType           string     `db:"service_type"`             // The type of the service.
 	ModelIpfsHash         string     `db:"model_ipfs_hash"`          // The IPFS hash of the service model.
+	ServiceApiSource      string     `db:"service_api_source"`       // The service API source (new field for newer services).
 	MPEAddress            string     `db:"mpe_address"`              // The MPE address of the service.
 	URL                   string     `db:"url"`                      // The URL of the service.
 	Price                 int        `db:"price"`                    // The price of the service.

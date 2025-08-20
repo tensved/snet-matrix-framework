@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/tensved/snet-matrix-framework/internal/config"
 )

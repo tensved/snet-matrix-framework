@@ -4,8 +4,9 @@ package blockchain
 
 import (
 	"errors"
-	"github.com/tensved/snet-matrix-framework/pkg/db"
 	"math/big"
+
+	"github.com/tensved/snet-matrix-framework/pkg/db"
 )
 
 // OrganizationMetaData represents metadata for an organization in the blockchain.
@@ -67,7 +68,7 @@ func (o OrganizationMetaData) DB() (db.SnetOrganization, []db.SnetOrgGroup) {
 //   - db.SnetService: The database representation of the service.
 func (s ServiceMetadata) DB() (db.SnetService, error) {
 	if len(s.Groups) > 0 {
-		if len(s.Groups[0].Endpoints[0]) > 0 && len(s.Groups[0].Pricing) > 0 {
+		if len(s.Groups[0].Endpoints) > 0 && len(s.Groups[0].Endpoints[0]) > 0 && len(s.Groups[0].Pricing) > 0 {
 			return db.SnetService{
 				ID:                    s.ID,
 				SnetID:                s.SnetID,
@@ -78,6 +79,7 @@ func (s ServiceMetadata) DB() (db.SnetService, error) {
 				Encoding:              s.Encoding,
 				ServiceType:           s.ServiceType,
 				ModelIpfsHash:         s.ModelIpfsHash,
+				ServiceApiSource:      s.ServiceApiSource,
 				MPEAddress:            s.MpeAddress,
 				URL:                   s.Groups[0].Endpoints[0],
 				Price:                 s.Groups[0].Pricing[0].PriceInCogs,
@@ -117,17 +119,18 @@ type PaymentChannelStorageClient struct {
 
 // ServiceMetadata represents metadata for a service in the blockchain.
 type ServiceMetadata struct {
-	ID            int    `json:"id"`              // Internal ID.
-	SnetID        string `json:"snetId"`          // ID from blockchain.
-	SnetOrgID     string `json:"snetOrgId"`       // Organization ID from blockchain.
-	OrgID         int    `json:"orgId"`           // Internal organization ID.
-	Version       int    `json:"version"`         // Version of the service.
-	DisplayName   string `json:"display_name"`    // Display name of the service.
-	Encoding      string `json:"encoding"`        // Encoding type of the service.
-	ServiceType   string `json:"service_type"`    // Type of the service.
-	ModelIpfsHash string `json:"model_ipfs_hash"` // IPFS hash of the service model.
-	MpeAddress    string `json:"mpe_address"`     // MPE address of the service.
-	Groups        []struct {
+	ID               int    `json:"id"`                 // Internal ID.
+	SnetID           string `json:"snetId"`             // ID from blockchain.
+	SnetOrgID        string `json:"snetOrgId"`          // Organization ID from blockchain.
+	OrgID            int    `json:"orgId"`              // Internal organization ID.
+	Version          int    `json:"version"`            // Version of the service.
+	DisplayName      string `json:"display_name"`       // Display name of the service.
+	Encoding         string `json:"encoding"`           // Encoding type of the service.
+	ServiceType      string `json:"service_type"`       // Type of the service.
+	ModelIpfsHash    string `json:"model_ipfs_hash"`    // IPFS hash of the service model.
+	ServiceApiSource string `json:"service_api_source"` // Service API source (new field for newer services).
+	MpeAddress       string `json:"mpe_address"`        // MPE address of the service.
+	Groups           []struct {
 		FreeCalls             int      `json:"free_calls"`               // Number of free calls.
 		FreeCallSignerAddress string   `json:"free_call_signer_address"` // Address of the free call signer.
 		DaemonAddresses       []string `json:"daemon_addresses"`         // Daemon addresses.

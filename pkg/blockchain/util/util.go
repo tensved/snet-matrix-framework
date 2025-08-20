@@ -5,6 +5,12 @@ import (
 	"crypto/ecdsa"
 	"encoding/base64"
 	"fmt"
+	"math/big"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -12,14 +18,9 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
-	"math/big"
-	"net/url"
-	"strconv"
-	"strings"
-	"time"
 )
 
-// EstimateGas returns a new bind.TransactOpts instance with zero gas limit
+// Deprecated: EstimateGas returns a new bind.TransactOpts instance with zero gas limit
 // based on the provided wallet's transaction options.
 //
 // Parameters:
@@ -70,7 +71,7 @@ func BigIntToBytes(value *big.Int) []byte {
 	return common.BigToHash(value).Bytes()
 }
 
-// AgixToCog converts an AGIX amount to its equivalent in COG (smallest unit).
+// Deprecated: AgixToCog converts an AGIX amount to its equivalent in COG (smallest unit).
 //
 // Parameters:
 //   - iamount: The amount to be converted, which can be of type string, float64, int64, decimal.Decimal, or *decimal.Decimal.
@@ -109,7 +110,7 @@ func AgixToCog(iamount any) (agix *big.Int, err error) {
 	return
 }
 
-// CogToAgix converts a COG amount to its equivalent in AGIX.
+// Deprecated: CogToAgix converts a COG amount to its equivalent in AGIX.
 //
 // Parameters:
 //   - ivalue: The value to be converted, which can be of type string, *big.Int, or int.
@@ -142,6 +143,7 @@ func CogToAgix(ivalue any) decimal.Decimal {
 	return result
 }
 
+// Deprecated: DecodePaymentGroupID decodes a base64-encoded payment group ID.
 func DecodePaymentGroupID(encoded string) ([32]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -196,6 +198,7 @@ func GetNewExpiration(lastBlockNumber, paymentExpirationThreshold *big.Int) *big
 	return new(big.Int).Add(defaultExpiration, blockOffset)
 }
 
+// Deprecated: RemoveProtocol removes the protocol scheme from a URL.
 func RemoveProtocol(rawURL string) (string, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
@@ -205,6 +208,7 @@ func RemoveProtocol(rawURL string) (string, error) {
 	return strings.TrimPrefix(rawURL, parsedURL.Scheme+"://"), nil
 }
 
+// Deprecated: WaitingForChannelToOpen waits for a channel to open within the specified timeout.
 func WaitingForChannelToOpen(channelOpens <-chan *blockchain.MultiPartyEscrowChannelOpen, errChan <-chan error, timeout time.Duration) *big.Int {
 	select {
 	case openEvent := <-channelOpens:
@@ -218,6 +222,7 @@ func WaitingForChannelToOpen(channelOpens <-chan *blockchain.MultiPartyEscrowCha
 	return nil
 }
 
+// Deprecated: WaitingForChannelToExtend waits for a channel to extend within the specified timeout.
 func WaitingForChannelToExtend(channelExtends <-chan *blockchain.MultiPartyEscrowChannelExtend, errChan <-chan error, timeout time.Duration) *big.Int {
 	select {
 	case extendEvent := <-channelExtends:
@@ -231,6 +236,7 @@ func WaitingForChannelToExtend(channelExtends <-chan *blockchain.MultiPartyEscro
 	return nil
 }
 
+// Deprecated: WaitingForChannelFundsToBeAdded waits for funds to be added to a channel within the specified timeout.
 func WaitingForChannelFundsToBeAdded(channelAddFunds <-chan *blockchain.MultiPartyEscrowChannelAddFunds, errChan <-chan error, timeout time.Duration) *big.Int {
 	select {
 	case addFundsEvent := <-channelAddFunds:
@@ -244,6 +250,7 @@ func WaitingForChannelFundsToBeAdded(channelAddFunds <-chan *blockchain.MultiPar
 	return nil
 }
 
+// Deprecated: WaitingToDepositFundsToMPE waits for funds to be deposited to MPE within the specified timeout.
 func WaitingToDepositFundsToMPE(channelDepositFunds <-chan *blockchain.MultiPartyEscrowDepositFunds, errChan <-chan error, timeout time.Duration) bool {
 	select {
 	case depositFundsEvent := <-channelDepositFunds:
@@ -257,6 +264,7 @@ func WaitingToDepositFundsToMPE(channelDepositFunds <-chan *blockchain.MultiPart
 	return false
 }
 
+// Deprecated: IsChannelValid checks if a channel is valid based on funds and expiration.
 func IsChannelValid(filteredEvent *blockchain.MultiPartyEscrowChannelOpen, bigIntPrice *big.Int, newExpiration *big.Int) (bool, bool) {
 	hasSufficientFunds := filteredEvent.Amount.Cmp(bigIntPrice) >= 0
 	isValidExpiration := filteredEvent.Expiration.Cmp(newExpiration) > 0
