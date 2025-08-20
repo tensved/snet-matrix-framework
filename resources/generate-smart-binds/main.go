@@ -24,7 +24,7 @@ func main() {
 		log.Fatalf("Failed to generate binding: %v", err)
 	}
 
-	if err := os.WriteFile("/app/pkg/blockchain/registry_and_mpe.go", []byte(bindContent), 0600); err != nil {
+	if err := os.WriteFile("registry_and_mpe.go", []byte(bindContent), 0600); err != nil {
 		log.Fatalf("Failed to write ABI binding: %v", err)
 	}
 }
