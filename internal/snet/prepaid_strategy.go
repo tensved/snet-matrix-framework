@@ -28,9 +28,9 @@ const (
 	PrefixInSignature         = "__MPE_claim_message"
 )
 
-// PrepaidStrategy implements prepaid call strategy
-type PrepaidStrategy struct {
-	evmClient       blockchain.Ethereum
+// PaymentChannelHandler implements payment channel call strategy for blockchain services
+type PaymentChannelHandler struct {
+	ethClient       blockchain.Ethereum
 	grpcManager     *grpcmanager.GRPCClientManager
 	serviceMetadata *db.SnetService
 	privateKeyECDSA *ecdsa.PrivateKey
@@ -43,8 +43,8 @@ type PrepaidStrategy struct {
 	mpeAddress      common.Address
 }
 
-// NewPrepaidStrategy creates a new prepaid call strategy
-func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientManager, serviceMetadata *db.SnetService, privateKey *ecdsa.PrivateKey, callCount uint64, database db.Service) (Strategy, error) {
+// NewPaymentChannelHandler creates a new payment channel call strategy
+func NewPaymentChannelHandler(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientManager, serviceMetadata *db.SnetService, privateKey *ecdsa.PrivateKey, callCount uint64, database db.Service) (Strategy, error) {
 	logger := log.With().
 		Str("service_id", serviceMetadata.SnetID).
 		Str("service_url", serviceMetadata.URL).
@@ -125,7 +125,7 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 				Msg("found channel has different recipient, creating new one")
 			filteredChannel = nil
 		} else {
-			_, err := GetChannelStateFromDaemon(grpc, context.Background(), serviceMetadata.URL, mpeAddress, filteredChannel.ChannelId, currentBlockNumber, privateKey)
+			_, err := GetChannelInfoFromService(grpc, context.Background(), serviceMetadata.URL, mpeAddress, filteredChannel.ChannelId, currentBlockNumber, privateKey)
 			if err != nil {
 				logger.Info().
 					Str("channel_id", filteredChannel.ChannelId.String()).
@@ -147,7 +147,7 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 		var channelState *ChannelStateReply
 		for i := 0; i < 5; i++ {
 			time.Sleep(2 * time.Second)
-			channelState, err = GetChannelStateFromDaemon(grpc, context.Background(), serviceMetadata.URL, mpeAddress, channelID, currentBlockNumber, privateKey)
+			channelState, err = GetChannelInfoFromService(grpc, context.Background(), serviceMetadata.URL, mpeAddress, channelID, currentBlockNumber, privateKey)
 			if err == nil {
 				break
 			}
@@ -182,10 +182,10 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 			Str("channel_id", channelID.String()).
 			Str("nonce", nonce.String()).
 			Str("signed_amount", signedAmount.String()).
-			Msg("prepaid strategy created with new channel")
+			Msg("payment channel handler created with new channel")
 
-		return &PrepaidStrategy{
-			evmClient:       evm,
+		return &PaymentChannelHandler{
+			ethClient:       evm,
 			grpcManager:     grpc,
 			serviceMetadata: serviceMetadata,
 			privateKeyECDSA: privateKey,
@@ -202,7 +202,7 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 		Str("channel_id", filteredChannel.ChannelId.String()).
 		Msg("using existing payment channel")
 
-	filteredChannelState, err := GetChannelStateFromDaemon(grpc, context.Background(), serviceMetadata.URL, mpeAddress, filteredChannel.ChannelId, currentBlockNumber, privateKey)
+	filteredChannelState, err := GetChannelInfoFromService(grpc, context.Background(), serviceMetadata.URL, mpeAddress, filteredChannel.ChannelId, currentBlockNumber, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel state: %w", err)
 	}
@@ -214,7 +214,7 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 		return nil, fmt.Errorf("failed to ensure channel validity: %w", err)
 	}
 
-	channelState, err := GetChannelStateFromDaemon(grpc, context.Background(), serviceMetadata.URL, mpeAddress, channelID, currentBlockNumber, privateKey)
+	channelState, err := GetChannelInfoFromService(grpc, context.Background(), serviceMetadata.URL, mpeAddress, channelID, currentBlockNumber, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get final channel state: %w", err)
 	}
@@ -243,10 +243,10 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 		Str("channel_id", channelID.String()).
 		Str("nonce", nonce.String()).
 		Str("signed_amount", signedAmount.String()).
-		Msg("prepaid strategy created with existing channel")
+		Msg("payment channel handler created with existing channel")
 
-	return &PrepaidStrategy{
-		evmClient:       evm,
+	return &PaymentChannelHandler{
+		ethClient:       evm,
 		grpcManager:     grpc,
 		serviceMetadata: serviceMetadata,
 		privateKeyECDSA: privateKey,
@@ -259,87 +259,94 @@ func NewPrepaidStrategy(evm blockchain.Ethereum, grpc *grpcmanager.GRPCClientMan
 	}, nil
 }
 
-// Refresh updates the prepaid strategy state (gets token)
-func (p *PrepaidStrategy) Refresh(ctx context.Context) error {
+// UpdateTokenState refreshes the payment handler state and obtains a new authentication token
+func (h *PaymentChannelHandler) UpdateTokenState(ctx context.Context) error {
 	logger := log.With().
-		Str("service_id", p.serviceMetadata.SnetID).
-		Str("channel_id", p.channelID.String()).
+		Str("service_id", h.serviceMetadata.SnetID).
+		Str("channel_id", h.channelID.String()).
 		Logger()
 
-	currentBlockNumber, err := p.evmClient.Client.BlockNumber(ctx)
+	currentBlockNumber, err := h.ethClient.Client.BlockNumber(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get current block number")
 		return fmt.Errorf("failed to get current block: %w", err)
 	}
 
-	claimSignature := p.getClaimSignature()
+	// Generate claim signature for the payment channel
+	claimSignature := h.generatePaymentClaimSignature()
 
-	signature := p.getSignature(claimSignature, big.NewInt(int64(currentBlockNumber)))
+	// Sign the claim with current block number for time-based validation
+	signature := h.signWithBlockNumber(claimSignature, big.NewInt(int64(currentBlockNumber)))
 
 	request := TokenRequest{
-		ChannelId:      p.channelID.Uint64(),
-		CurrentNonce:   p.nonce.Uint64(),
-		SignedAmount:   p.signedAmount.Uint64(),
+		ChannelId:      h.channelID.Uint64(),
+		CurrentNonce:   h.nonce.Uint64(),
+		SignedAmount:   h.signedAmount.Uint64(),
 		Signature:      signature,
 		CurrentBlock:   currentBlockNumber,
 		ClaimSignature: claimSignature,
 	}
 
-	tokenReply, err := p.tokenClient.GetToken(ctx, &request)
+	tokenReply, err := h.tokenClient.GetToken(ctx, &request)
 	if err != nil {
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 
-	p.Token = tokenReply.GetToken()
+	h.Token = tokenReply.GetToken()
 	logger.Debug().
-		Str("token", p.Token).
+		Str("token", h.Token).
 		Uint64("channel_id", tokenReply.GetChannelId()).
 		Uint64("planned_amount", tokenReply.GetPlannedAmount()).
 		Uint64("used_amount", tokenReply.GetUsedAmount()).
-		Msg("prepaid strategy refreshed successfully")
+		Msg("payment handler token state updated successfully")
 	return nil
 }
 
-// GRPCMetadata creates metadata for gRPC call
-func (p *PrepaidStrategy) GRPCMetadata(ctx context.Context) context.Context {
+// BuildRequestMetadata constructs gRPC metadata for service calls with payment information
+func (h *PaymentChannelHandler) BuildRequestMetadata(ctx context.Context) context.Context {
 	logger := log.With().
-		Str("service_id", p.serviceMetadata.SnetID).
-		Str("channel_id", p.channelID.String()).
+		Str("service_id", h.serviceMetadata.SnetID).
+		Str("channel_id", h.channelID.String()).
 		Logger()
 
 	logger.Debug().
-		Str("token", p.Token).
-		Msg("creating gRPC metadata")
+		Str("token", h.Token).
+		Msg("building gRPC request metadata")
 
+	// Construct metadata with payment channel information
 	md := metadata.New(map[string]string{
 		"snet-payment-type":       "prepaid-call",
-		PaymentChannelIDHeader:    p.channelID.String(),
-		PaymentChannelNonceHeader: p.nonce.String(),
-		PrePaidAuthTokenHeader:    p.Token,
+		PaymentChannelIDHeader:    h.channelID.String(),
+		PaymentChannelNonceHeader: h.nonce.String(),
+		PrePaidAuthTokenHeader:    h.Token,
 	})
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-// GetFreeCallsAvailable returns the number of available free calls
-func (p *PrepaidStrategy) GetFreeCallsAvailable() (uint64, error) {
+// AvailableFreeCallCount returns the number of available free calls for this payment handler
+func (h *PaymentChannelHandler) AvailableFreeCallCount() (uint64, error) {
+	// Payment channel handlers do not support free calls
 	return 0, nil
 }
 
-// getClaimSignature creates claim signature
-func (p *PrepaidStrategy) getClaimSignature() []byte {
+// generatePaymentClaimSignature creates a cryptographic claim signature for payment validation
+func (h *PaymentChannelHandler) generatePaymentClaimSignature() []byte {
+	// Construct message by concatenating payment claim components
 	message := bytes.Join([][]byte{
 		[]byte(PrefixInSignature),
-		p.mpeAddress.Bytes(),
-		util.BigIntToBytes(p.channelID),
-		util.BigIntToBytes(p.nonce),
-		util.BigIntToBytes(p.signedAmount),
+		h.mpeAddress.Bytes(),
+		util.BigIntToBytes(h.channelID),
+		util.BigIntToBytes(h.nonce),
+		util.BigIntToBytes(h.signedAmount),
 	}, nil)
-	return util.GetSignature(message, p.privateKeyECDSA)
+	return util.GetSignature(message, h.privateKeyECDSA)
 }
 
-// getSignature creates signature with current block
-func (p *PrepaidStrategy) getSignature(mpeSignature []byte, currentBlockNumber *big.Int) []byte {
+// signWithBlockNumber creates a time-bounded signature by combining payment signature with current block number
+func (h *PaymentChannelHandler) signWithBlockNumber(paymentSignature []byte, currentBlockNumber *big.Int) []byte {
+	// Convert block number to bytes for signature
 	blockBytes := math.U256Bytes(currentBlockNumber)
-	message := bytes.Join([][]byte{mpeSignature, blockBytes}, nil)
-	return util.GetSignature(message, p.privateKeyECDSA)
+	// Combine payment signature with block number for temporal validation
+	message := bytes.Join([][]byte{paymentSignature, blockBytes}, nil)
+	return util.GetSignature(message, h.privateKeyECDSA)
 }

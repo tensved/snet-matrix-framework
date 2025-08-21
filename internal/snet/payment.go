@@ -27,9 +27,9 @@ import (
 
 // Strategy interface for payment strategies
 type Strategy interface {
-	GRPCMetadata(ctx context.Context) context.Context
-	Refresh(ctx context.Context) error
-	GetFreeCallsAvailable() (uint64, error)
+	BuildRequestMetadata(ctx context.Context) context.Context
+	UpdateTokenState(ctx context.Context) error
+	AvailableFreeCallCount() (uint64, error)
 }
 
 // PaymentManager manages payments and strategies
@@ -62,24 +62,24 @@ func (pm *PaymentManager) GetStrategy(snetService *db.SnetService) (Strategy, er
 
 	logger.Debug().Msg("selecting payment strategy")
 
-	logger.Debug().Msg("using prepaid strategy")
-	return pm.getPrepaidStrategy(snetService)
+	logger.Debug().Msg("using payment channel strategy")
+	return pm.getPaymentChannelHandler(snetService)
 }
 
-// getPrepaidStrategy creates a prepaid strategy
-func (pm *PaymentManager) getPrepaidStrategy(snetService *db.SnetService) (Strategy, error) {
+// getPaymentChannelHandler creates a payment channel handler
+func (pm *PaymentManager) getPaymentChannelHandler(snetService *db.SnetService) (Strategy, error) {
 	logger := log.With().
 		Str("service_id", snetService.SnetID).
 		Logger()
 
-	logger.Debug().Msg("creating prepaid strategy")
-	prepaidStrategy, err := NewPrepaidStrategy(pm.ethClient, pm.grpcManager, snetService, pm.privateKey, 1, pm.database) // callCount = 1
+	logger.Debug().Msg("creating payment channel handler")
+	paymentHandler, err := NewPaymentChannelHandler(pm.ethClient, pm.grpcManager, snetService, pm.privateKey, 1, pm.database) // callCount = 1
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to create prepaid strategy")
-		return nil, fmt.Errorf("failed to create prepaid strategy: %w", err)
+		logger.Error().Err(err).Msg("failed to create payment channel handler")
+		return nil, fmt.Errorf("failed to create payment channel handler: %w", err)
 	}
-	logger.Debug().Msg("prepaid strategy created successfully")
-	return prepaidStrategy, nil
+	logger.Debug().Msg("payment channel handler created successfully")
+	return paymentHandler, nil
 }
 
 // ExecuteCall executes a service call with automatic strategy selection
@@ -97,10 +97,10 @@ func (pm *PaymentManager) ExecuteCall(ctx context.Context, snetService *db.SnetS
 		return nil, fmt.Errorf("failed to get strategy: %w", err)
 	}
 
-	err = strategy.Refresh(ctx)
+	err = strategy.UpdateTokenState(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to refresh payment strategy")
-		return nil, fmt.Errorf("failed to refresh strategy: %w", err)
+		logger.Error().Err(err).Msg("failed to update payment handler token state")
+		return nil, fmt.Errorf("failed to update strategy token state: %w", err)
 	}
 
 	result, err := pm.callService(ctx, snetService, methodName, inputData, strategy)
@@ -128,7 +128,7 @@ func (pm *PaymentManager) callService(ctx context.Context, snetService *db.SnetS
 		return nil, fmt.Errorf("failed to get gRPC client: %w", err)
 	}
 
-	ctxWithMetadata := strategy.GRPCMetadata(ctx)
+	ctxWithMetadata := strategy.BuildRequestMetadata(ctx)
 	if ctxWithMetadata == nil {
 		logger.Error().Msg("failed to get gRPC metadata")
 		return nil, fmt.Errorf("failed to get gRPC metadata")
@@ -243,8 +243,8 @@ func (pm *PaymentManager) findMethod(files linker.Files, methodName string) (pro
 	return nil, nil, fmt.Errorf("method %s not found in provided proto files", methodName)
 }
 
-// GetChannelStateFromDaemon retrieves channel state from the daemon.
-func GetChannelStateFromDaemon(grpcManager *grpcmanager.GRPCClientManager, ctx context.Context, daemonURL string, mpeAddress common.Address, channelID *big.Int, currentBlockNumber uint64, privateKey *ecdsa.PrivateKey) (*ChannelStateReply, error) {
+// GetChannelInfoFromService retrieves channel state information from the service daemon.
+func GetChannelInfoFromService(grpcManager *grpcmanager.GRPCClientManager, ctx context.Context, daemonURL string, mpeAddress common.Address, channelID *big.Int, currentBlockNumber uint64, privateKey *ecdsa.PrivateKey) (*ChannelStateReply, error) {
 	grpcClient, err := grpcManager.GetClient(daemonURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gRPC client: %w", err)
