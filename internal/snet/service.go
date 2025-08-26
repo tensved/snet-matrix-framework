@@ -6,6 +6,11 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"math/big"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -16,21 +21,18 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/bobrix/contracts"
-	escrow "github.com/tensved/snet-matrix-framework/generated"
+
 	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain/util"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"math/big"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Handler struct {
@@ -50,6 +52,7 @@ const (
 	paymentChannelTimeout = time.Minute * 1
 )
 
+// Deprecated: MultiPartyEscrowChannel represents a multi-party escrow channel.
 type MultiPartyEscrowChannel struct {
 	Sender     common.Address
 	Recipient  common.Address
@@ -60,6 +63,7 @@ type MultiPartyEscrowChannel struct {
 	Signer     common.Address
 }
 
+// Deprecated: chansToWatch represents channels for watching blockchain events.
 type chansToWatch struct {
 	channelOpens    chan *blockchain.MultiPartyEscrowChannelOpen
 	channelExtends  chan *blockchain.MultiPartyEscrowChannelExtend
@@ -68,6 +72,7 @@ type chansToWatch struct {
 	err             chan error
 }
 
+// Deprecated: bindOpts represents binding options for blockchain operations.
 type bindOpts struct {
 	call     *bind.CallOpts
 	transact *bind.TransactOpts
@@ -76,6 +81,7 @@ type bindOpts struct {
 }
 
 func NewHandler(descriptorName, snetID, serviceName, methodName string, inputMsg, outputMsg *dynamicpb.Message, eth blockchain.Ethereum, db db.Service, grpc *grpcmanager.GRPCClientManager) *Handler {
+
 	return &Handler{
 		DescriptorName: descriptorName,
 		SnetID:         snetID,
@@ -92,7 +98,7 @@ func NewHandler(descriptorName, snetID, serviceName, methodName string, inputMsg
 func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName, snetID, serviceName string, eth blockchain.Ethereum, db db.Service, grpc *grpcmanager.GRPCClientManager) *contracts.Service {
 	service := &contracts.Service{
 		Name:        snetID,
-		Description: serviceName,
+		Description: map[string]string{"en": serviceName},
 		Methods:     make(map[string]*contracts.Method),
 	}
 
@@ -101,8 +107,8 @@ func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName
 		for j := range methods.Len() {
 			if methods.Get(j) != nil {
 				method := &contracts.Method{}
-				var inputs []*contracts.Input
-				var outputs []*contracts.Output
+				var inputs []contracts.Input
+				var outputs []contracts.Output
 
 				method.Name = string(methods.Get(j).Name())
 
@@ -111,9 +117,9 @@ func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName
 
 				if inputFields != nil {
 					for n := range inputFields.Len() {
-						input := &contracts.Input{
+						input := contracts.Input{
 							Name:        inputFields.Get(n).JSONName(),
-							Description: fmt.Sprintf("Field: %s", inputFields.Get(n).JSONName()),
+							Description: map[string]string{"en": fmt.Sprintf("Field: %s", inputFields.Get(n).JSONName())},
 							IsRequired:  true,
 						}
 						inputs = append(inputs, input)
@@ -122,7 +128,7 @@ func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName
 
 				if outputFields != nil {
 					for n := range outputFields.Len() {
-						output := &contracts.Output{
+						output := contracts.Output{
 							Name: outputFields.Get(n).JSONName(),
 						}
 						outputs = append(outputs, output)
@@ -145,7 +151,27 @@ func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName
 				method.Inputs = inputs
 				method.Outputs = outputs
 
-				method.Handler = NewHandler(descriptorName, snetID, serviceName, method.Name, inputMsg, outputMsg, eth, db, grpc)
+				method.Handler = &contracts.Handler{
+					Name: method.Name,
+					Do: func(ctx contracts.HandlerContext) error {
+						handler := NewHandler(descriptorName, snetID, serviceName, method.Name, inputMsg, outputMsg, eth, db, grpc)
+						inputData := make(map[string]any)
+						for name, input := range ctx.Inputs() {
+							inputData[name] = input.Value()
+						}
+						response := handler.Do(inputData)
+						if response.Err != nil {
+							return response.Err
+						}
+						// Copy outputs from response to context
+						for name, output := range response.Outputs {
+							if ctxOutput, ok := ctx.Outputs()[name]; ok {
+								ctxOutput.SetValue(output.Value())
+							}
+						}
+						return nil
+					},
+				}
 
 				service.Methods[method.Name] = method
 			}
@@ -156,130 +182,104 @@ func NewService(serviceDescriptor protoreflect.ServiceDescriptor, descriptorName
 }
 
 func (h *Handler) Do(inputData map[string]any) *contracts.MethodResponse {
+	logger := log.With().
+		Str("service_id", h.SnetID).
+		Str("method", h.MethodName).
+		Str("descriptor", h.DescriptorName).
+		Logger()
+
+	startTime := time.Now()
+
 	snetService, err := h.DB.GetSnetService(h.SnetID)
 	if err != nil {
-		log.Error().Err(err)
+		logger.Error().Err(err).Msg("failed to get service from database")
 		return &contracts.MethodResponse{
-			Error: err,
+			Err: err,
 		}
 	}
 
-	bigIntPriceInCogs := big.NewInt(int64(snetService.Price))
+	logger.Debug().
+		Str("service_url", snetService.URL).
+		Str("service_name", snetService.DisplayName).
+		Msg("retrieved service from database")
 
-	group, _ := h.DB.GetSnetOrgGroup(snetService.GroupID)
-
-	groupID, err := util.DecodePaymentGroupID(group.GroupID)
+	privateKey, err := crypto.HexToECDSA(config.Blockchain.AdminPrivateKey)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to parse private key")
 		return &contracts.MethodResponse{
-			Error: err,
+			Err: err,
 		}
 	}
 
-	recipient := common.HexToAddress(group.PaymentAddress)
-
-	fromAddress, privateKeyECDSA, err := h.getFromAddressAndPrivateKeyECDSA()
+	protoFiles, err := getProtoFilesForService(snetService)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to get proto files")
 		return &contracts.MethodResponse{
-			Error: err,
+			Err: err,
 		}
 	}
 
-	lastBlockNumber := h.getLastBlockNumber()
+	logger.Debug().
+		Int("proto_files_count", len(protoFiles)).
+		Msg("retrieved proto files")
 
-	opts := &bindOpts{
-		call:     util.GetCallOpts(fromAddress, lastBlockNumber),
-		transact: util.GetTransactOpts(privateKeyECDSA),
-		watch:    util.GetWatchOpts(lastBlockNumber),
-		filter:   util.GetFilterOpts(lastBlockNumber),
-	}
+	paymentManager := NewPaymentManager(h.ETH, h.DB, h.GRPCManager, privateKey, protoFiles)
 
-	chans := &chansToWatch{
-		channelOpens:    make(chan *blockchain.MultiPartyEscrowChannelOpen),
-		channelExtends:  make(chan *blockchain.MultiPartyEscrowChannelExtend),
-		channelAddFunds: make(chan *blockchain.MultiPartyEscrowChannelAddFunds),
-		DepositFunds:    make(chan *blockchain.MultiPartyEscrowDepositFunds),
-		err:             make(chan error),
-	}
-
-	senders := []common.Address{fromAddress}
-	recipients := []common.Address{recipient}
-	groupIDs := [][32]byte{groupID}
-
-	filteredChannel, err := h.filterChannels(senders, recipients, groupIDs, opts.filter)
+	result, err := paymentManager.ExecuteCall(context.Background(), snetService, h.MethodName, inputData)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to execute service call")
 		return &contracts.MethodResponse{
-			Error: err,
+			Err: err,
 		}
 	}
 
-	mpeBalance, err := h.getMPEBalance(opts.call)
-	if err != nil {
-		return &contracts.MethodResponse{
-			Error: err,
+	var response interface{}
+	if resultMap, ok := result.(map[string]interface{}); ok {
+		if resp, exists := resultMap["response"]; exists {
+			response = resp
+		} else {
+			response = result
 		}
-	}
-	hasSufficientBalance := mpeBalance.Cmp(bigIntPriceInCogs) >= 0
-
-	newExpiration := util.GetNewExpiration(lastBlockNumber, group.PaymentExpirationThreshold)
-
-	channelID, _, err := h.selectPaymentChannel(filteredChannel, hasSufficientBalance, chans, opts, senders, recipients, groupIDs, bigIntPriceInCogs, newExpiration)
-	if err != nil {
-		log.Error().Err(err)
-		return &contracts.MethodResponse{
-			Error: err,
-		}
+	} else {
+		response = result
 	}
 
-	channelState, err := h.getChannelStateFromDaemon(snetService.URL, channelID, lastBlockNumber, privateKeyECDSA)
-	if err != nil {
-		return &contracts.MethodResponse{
-			Error: err,
-		}
+	output := contracts.Output{
+		Name: "answer",
+		Type: contracts.IOTypeText,
 	}
+	output.SetValue(response)
 
-	nonce := new(big.Int).SetBytes(channelState.GetCurrentNonce())
-	if nonce == nil {
-		return &contracts.MethodResponse{
-			Error: errors.New("invalid nonce"),
-		}
-	}
-
-	signedAmount := new(big.Int).SetBytes(channelState.GetCurrentSignedAmount())
-	if signedAmount == nil {
-		return &contracts.MethodResponse{
-			Error: errors.New("invalid signed amount"),
-		}
-	}
-
-	totalAmount := signedAmount.Int64() + int64(snetService.Price)
-
-	md := h.getMetadataToInvokeMethod(channelID, nonce, totalAmount, privateKeyECDSA)
-
-	h.fillInputs(inputData)
-	inputProto := protoadapt.MessageV2Of(h.InputMsg)
-
-	result, err := h.callMethod(snetService.URL, inputProto, h.OutputMsg, md)
-	if err != nil {
-		log.Error().Err(err)
-		return &contracts.MethodResponse{
-			Error: err,
-		}
-	}
+	duration := time.Since(startTime)
+	logger.Info().
+		Dur("duration", duration).
+		Interface("response", response).
+		Msg("service request completed successfully")
 
 	return &contracts.MethodResponse{
-		Data: map[string]any{
-			"answer": result,
+		Outputs: map[string]contracts.Output{
+			"answer": output,
 		},
 	}
 }
 
+// Deprecated: getChannelStateFromBlockchain retrieves channel state from the blockchain.
 func (h *Handler) getChannelStateFromBlockchain(channelID *big.Int) (channel *MultiPartyEscrowChannel, ok bool, err error) {
+	logger := log.With().
+		Str("channel_id", channelID.String()).
+		Logger()
+
+	logger.Debug().Msg("getting channel state from blockchain")
+
 	ch, err := h.ETH.MPE.Channels(nil, channelID)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to get channel from blockchain")
 		return nil, false, err
 	}
+
 	var zeroAddress = common.Address{}
 	if ch.Sender == zeroAddress {
+		logger.Warn().Msg("channel has zero sender address")
 		return nil, false, errors.New("incorrect sender of channel")
 	}
 
@@ -293,25 +293,43 @@ func (h *Handler) getChannelStateFromBlockchain(channelID *big.Int) (channel *Mu
 		Signer:     ch.Signer,
 	}
 
-	log.Debug().Msgf("channel state in blockchain: %+v", channel)
+	logger.Debug().
+		Str("sender", ch.Sender.Hex()).
+		Str("recipient", ch.Recipient.Hex()).
+		Str("value", ch.Value.String()).
+		Str("nonce", ch.Nonce.String()).
+		Str("expiration", ch.Expiration.String()).
+		Msg("retrieved channel state from blockchain")
 
 	return channel, true, nil
 }
 
-func (h *Handler) getChannelStateFromDaemon(serviceURL string, channelID, lastBlockNumber *big.Int, privateKeyECDSA *ecdsa.PrivateKey) (*escrow.ChannelStateReply, error) {
+// Deprecated: getChannelStateFromDaemon retrieves channel state from daemon.
+func (h *Handler) getChannelStateFromDaemon(serviceURL string, channelID, lastBlockNumber *big.Int, privateKeyECDSA *ecdsa.PrivateKey) (*ChannelStateReply, error) {
+	logger := log.With().
+		Str("service_url", serviceURL).
+		Str("channel_id", channelID.String()).
+		Str("block_number", lastBlockNumber.String()).
+		Logger()
+
+	logger.Debug().Msg("getting channel state from daemon")
+
 	grpcService, err := h.GRPCManager.GetClient(serviceURL)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to get gRPC client")
 		return nil, err
 	}
 
 	if grpcService.Conn == nil {
+		logger.Error().Msg("gRPC service connection is nil")
 		return nil, errors.New("grpc service connection is nil")
 	}
-	client := escrow.NewPaymentChannelStateServiceClient(grpcService.Conn)
+
+	client := NewPaymentChannelStateServiceClient(grpcService.Conn)
 
 	signature := h.getSignatureToGetChannelStateFromDaemon(channelID, lastBlockNumber, privateKeyECDSA)
 
-	request := &escrow.ChannelStateRequest{
+	request := &ChannelStateRequest{
 		ChannelId:    util.BigIntToBytes(channelID),
 		Signature:    signature,
 		CurrentBlock: lastBlockNumber.Uint64(),
@@ -328,6 +346,7 @@ func (h *Handler) getChannelStateFromDaemon(serviceURL string, channelID, lastBl
 	return reply, nil
 }
 
+// Deprecated: getSignatureToGetChannelStateFromDaemon creates signature for channel state request.
 func (h *Handler) getSignatureToGetChannelStateFromDaemon(channelID, lastBlockNumber *big.Int, privateKeyECDSA *ecdsa.PrivateKey) []byte {
 	message := bytes.Join([][]byte{
 		[]byte(prefixGetChannelState),
@@ -340,6 +359,7 @@ func (h *Handler) getSignatureToGetChannelStateFromDaemon(channelID, lastBlockNu
 	return signature
 }
 
+// Deprecated: getMetadataToInvokeMethod creates metadata for method invocation.
 func (h *Handler) getMetadataToInvokeMethod(channelID, nonce *big.Int, totalAmount int64, privateKeyECDSA *ecdsa.PrivateKey) metadata.MD {
 	message := bytes.Join([][]byte{
 		[]byte(blockchain.PrefixInSignature),
@@ -361,6 +381,7 @@ func (h *Handler) getMetadataToInvokeMethod(channelID, nonce *big.Int, totalAmou
 	return md
 }
 
+// Deprecated: callMethod calls a service method via gRPC.
 func (h *Handler) callMethod(serviceURL string, inputProto interface{}, outputMsg interface{}, md metadata.MD) (string, error) {
 	log.Debug().Msgf("call method: serviceURL=%v, inputProto=%v", serviceURL, inputProto)
 	client, err := h.GRPCManager.GetClient(serviceURL)
@@ -392,6 +413,7 @@ func (h *Handler) callMethod(serviceURL string, inputProto interface{}, outputMs
 	return jsonString, nil
 }
 
+// Deprecated: getMPEBalance retrieves MPE balance.
 func (h *Handler) getMPEBalance(callOpts *bind.CallOpts) (*big.Int, error) {
 	mpeBalance, err := h.ETH.MPE.Balances(callOpts, callOpts.From)
 	if err != nil {
@@ -401,29 +423,60 @@ func (h *Handler) getMPEBalance(callOpts *bind.CallOpts) (*big.Int, error) {
 	return mpeBalance, nil
 }
 
+// Deprecated: fillInputs fills input parameters for the handler.
 func (h *Handler) fillInputs(params map[string]any) {
 	cnt := 0
 	for fieldName, param := range params {
-		log.Debug().Msgf("set param %s with value %s to input field with name %s", param, protoreflect.ValueOf(param).String(), fieldName)
+		log.Debug().Msgf("set param %v with value %v to input field with name %s", param, param, fieldName)
 
 		kind := h.InputMsg.Descriptor().Fields().Get(cnt).Kind().String()
 		if kind == "float" {
-			value, err := strconv.ParseFloat(param.(string), 32)
-			if err != nil {
-				log.Error().Err(err).Msgf("failed to convert value %s to float32", param.(string))
+			var value float64
+			switch v := param.(type) {
+			case string:
+				var err error
+				value, err = strconv.ParseFloat(v, 64)
+				if err != nil {
+					log.Error().Err(err).Msgf("failed to convert value %s to float64", v)
+					return
+				}
+			case float64:
+				value = v
+			case float32:
+				value = float64(v)
+			case int:
+				value = float64(v)
+			case int64:
+				value = float64(v)
+			default:
+				log.Error().Msgf("unsupported type for float field: %T", param)
 				return
 			}
 			h.InputMsg.Set(h.InputMsg.Descriptor().Fields().ByName(protoreflect.Name(fieldName)), protoreflect.ValueOfFloat32(float32(value)))
 			continue
 		}
 		if kind == "string" {
-			h.InputMsg.Set(h.InputMsg.Descriptor().Fields().ByName(protoreflect.Name(fieldName)), protoreflect.ValueOfString(param.(string)))
+			var strValue string
+			switch v := param.(type) {
+			case string:
+				strValue = v
+			case float64:
+				strValue = strconv.FormatFloat(v, 'f', -1, 64)
+			case int:
+				strValue = strconv.Itoa(v)
+			case int64:
+				strValue = strconv.FormatInt(v, 10)
+			default:
+				strValue = fmt.Sprintf("%v", v)
+			}
+			h.InputMsg.Set(h.InputMsg.Descriptor().Fields().ByName(protoreflect.Name(fieldName)), protoreflect.ValueOfString(strValue))
 			continue
 		}
 		cnt++
 	}
 }
 
+// Deprecated: filterChannels filters payment channels.
 func (h *Handler) filterChannels(senders, recipients []common.Address, groupIDs [][32]byte, filterOpts *bind.FilterOpts) (*blockchain.MultiPartyEscrowChannelOpen, error) {
 	channelOpenIterator, err := h.ETH.MPE.FilterChannelOpen(filterOpts, senders, recipients, groupIDs)
 	if err != nil {
@@ -455,6 +508,7 @@ func (h *Handler) filterChannels(senders, recipients []common.Address, groupIDs 
 	return filteredEvent, nil
 }
 
+// Deprecated: getFromAddressAndPrivateKeyECDSA retrieves address and private key.
 func (h *Handler) getFromAddressAndPrivateKeyECDSA() (common.Address, *ecdsa.PrivateKey, error) {
 	privateKeyECDSA, err := crypto.HexToECDSA(config.Blockchain.AdminPrivateKey)
 	if err != nil {
@@ -473,6 +527,7 @@ func (h *Handler) getFromAddressAndPrivateKeyECDSA() (common.Address, *ecdsa.Pri
 	return fromAddress, privateKeyECDSA, nil
 }
 
+// Deprecated: watchChannelOpen watches for channel open events.
 func (h *Handler) watchChannelOpen(watchOpts *bind.WatchOpts, channelOpens chan *blockchain.MultiPartyEscrowChannelOpen, errChan chan error, senders, recipients []common.Address, groupIDs [][32]byte) {
 	_, err := h.ETH.MPE.WatchChannelOpen(watchOpts, channelOpens, senders, recipients, groupIDs)
 	if err != nil {
@@ -481,6 +536,7 @@ func (h *Handler) watchChannelOpen(watchOpts *bind.WatchOpts, channelOpens chan 
 	}
 }
 
+// Deprecated: watchDepositFunds watches for deposit fund events.
 func (h *Handler) watchDepositFunds(watchOpts *bind.WatchOpts, depositFundsChan chan *blockchain.MultiPartyEscrowDepositFunds, errChan chan error, senders []common.Address) {
 	_, err := h.ETH.MPE.WatchDepositFunds(watchOpts, depositFundsChan, senders)
 	if err != nil {
@@ -489,6 +545,7 @@ func (h *Handler) watchDepositFunds(watchOpts *bind.WatchOpts, depositFundsChan 
 	}
 }
 
+// Deprecated: watchChannelAddFunds watches for channel add funds events.
 func (h *Handler) watchChannelAddFunds(watchOpts *bind.WatchOpts, channelAddFundsChan chan *blockchain.MultiPartyEscrowChannelAddFunds, errChan chan error, channelIDs []*big.Int) {
 	_, err := h.ETH.MPE.WatchChannelAddFunds(watchOpts, channelAddFundsChan, channelIDs)
 	if err != nil {
@@ -497,6 +554,7 @@ func (h *Handler) watchChannelAddFunds(watchOpts *bind.WatchOpts, channelAddFund
 	}
 }
 
+// Deprecated: watchChannelExtend watches for channel extend events.
 func (h *Handler) watchChannelExtend(watchOpts *bind.WatchOpts, channelExtendsChan chan *blockchain.MultiPartyEscrowChannelExtend, errChan chan error, channelIDs []*big.Int) {
 	_, err := h.ETH.MPE.WatchChannelExtend(watchOpts, channelExtendsChan, channelIDs)
 	if err != nil {
@@ -505,6 +563,7 @@ func (h *Handler) watchChannelExtend(watchOpts *bind.WatchOpts, channelExtendsCh
 	}
 }
 
+// Deprecated: selectPaymentChannel selects appropriate payment channel.
 func (h *Handler) selectPaymentChannel(openedChannel *blockchain.MultiPartyEscrowChannelOpen, hasSufficientBalance bool, chans *chansToWatch, opts *bindOpts, senders, recipients []common.Address, groupIDs [][32]byte, price, newExpiration *big.Int) (*big.Int, *big.Int, error) {
 	abiString := "[{\"inputs\":[{\"internalType\":\"string\",\"name\":\"name\",\"type\":\"string\"},{\"internalType\":\"string\",\"name\":\"symbol\",\"type\":\"string\"}],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"spender\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Approval\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"Paused\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"previousAdminRole\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"newAdminRole\",\"type\":\"bytes32\"}],\"name\":\"RoleAdminChanged\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"}],\"name\":\"RoleGranted\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"}],\"name\":\"RoleRevoked\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"from\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"to\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Transfer\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"Unpaused\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"DEFAULT_ADMIN_ROLE\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"MINTER_ROLE\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"PAUSER_ROLE\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"owner\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"spender\",\"type\":\"address\"}],\"name\":\"allowance\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spender\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"approve\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"balanceOf\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"burn\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"burnFrom\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"decimals\",\"outputs\":[{\"internalType\":\"uint8\",\"name\":\"\",\"type\":\"uint8\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spender\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"subtractedValue\",\"type\":\"uint256\"}],\"name\":\"decreaseAllowance\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"}],\"name\":\"getRoleAdmin\",\"outputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"internalType\":\"uint256\",\"name\":\"index\",\"type\":\"uint256\"}],\"name\":\"getRoleMember\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"}],\"name\":\"getRoleMemberCount\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"grantRole\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"hasRole\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"spender\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"addedValue\",\"type\":\"uint256\"}],\"name\":\"increaseAllowance\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"to\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"mint\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"name\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"pause\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"paused\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"renounceRole\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"role\",\"type\":\"bytes32\"},{\"internalType\":\"address\",\"name\":\"account\",\"type\":\"address\"}],\"name\":\"revokeRole\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"symbol\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"totalSupply\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"recipient\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"transfer\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"recipient\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"transferFrom\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"unpause\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"}]"
 	tokenABI, err := abi.JSON(strings.NewReader(abiString))
@@ -696,6 +755,7 @@ func (h *Handler) selectPaymentChannel(openedChannel *blockchain.MultiPartyEscro
 	return channelID, nonce, nil
 }
 
+// Deprecated: getLastBlockNumber retrieves the last block number.
 func (h *Handler) getLastBlockNumber() *big.Int {
 	header, err := h.ETH.Client.HeaderByNumber(context.Background(), nil)
 	if err != nil {
@@ -705,6 +765,7 @@ func (h *Handler) getLastBlockNumber() *big.Int {
 	return header.Number
 }
 
+// Deprecated: waitForTransaction waits for transaction confirmation.
 func waitForTransaction(client *ethclient.Client, tx *types.Transaction) (*types.Receipt, error) {
 	ctx := context.Background()
 	txHash := tx.Hash()

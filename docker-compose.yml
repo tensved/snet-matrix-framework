@@ -9,20 +9,20 @@ services:
     env_file:
       - ./frontend/.env.local
     networks:
-      - webnet
+      - server
     restart: always
 
   backend:
     build:
       context: ./
       dockerfile: Dockerfile
-    container_name: backend
+    container_name: snet-backend
     ports:
       - "${APP_PORT}:${APP_PORT}"
     env_file:
       - ./.env
     networks:
-      - webnet
+      - server
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,7 +56,7 @@ services:
       DOMAIN: ${DOMAIN}
       BACKEND_PORT: ${APP_PORT}
     networks:
-      - webnet
+      - server
 
   certbot:
     image: certbot/certbot:latest
@@ -65,7 +65,7 @@ services:
       - ./certbot/www/:/var/www/certbot/:rw
       - ./certbot/conf/:/etc/letsencrypt/:rw
     networks:
-      - webnet
+      - server
 
   postgres:
     image: postgres:latest
@@ -84,12 +84,13 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - webnet
+      - server
     restart: always
 
 volumes:
   psql_volume:
 
 networks:
-  webnet:
+  server:
     driver: bridge
+    # external: true

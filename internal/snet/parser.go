@@ -2,11 +2,17 @@ package snet
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"strings"
+	"time"
+
+	"encoding/json"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/bobrix"
@@ -16,23 +22,23 @@ import (
 	"github.com/tensved/snet-matrix-framework/internal/matrix"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	ipfsutils "github.com/tensved/snet-matrix-framework/pkg/ipfs"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
-	"strings"
-	"time"
 )
 
 // ParsedNames contains parsed information from a user's message in Matrix room.
 type ParsedNames struct {
-	Bot        string // bot name. If private chat, it will be empty
-	SnetID     string
-	Descriptor string
-	Service    string
-	Method     string
+	Bot        string                 // bot name. If private chat, it will be empty
+	SnetID     string                 // service ID
+	Descriptor string                 // service descriptor
+	Service    string                 // service name
+	Method     string                 // method name
+	Params     map[string]interface{} // method parameters in JSON format
 }
 
-// CallState represents the state of a user interacting with the bot for sequential input filling.
+// Deprecated: CallState represents the state of a user interacting with the bot for sequential input filling.
 type CallState struct {
 	ServiceName    string            // name of the called service
 	Method         *contracts.Method // method that the user wants to call
@@ -41,7 +47,7 @@ type CallState struct {
 	FilledInputs   map[string]any    // inputs, that have been filled
 }
 
-// NewCallState creates a new CallState instance.
+// Deprecated: NewCallState creates a new CallState instance.
 func NewCallState(serviceName string, method *contracts.Method, eventID id.EventID) *CallState {
 	return &CallState{
 		ServiceName:    serviceName,
@@ -52,161 +58,160 @@ func NewCallState(serviceName string, method *contracts.Method, eventID id.Event
 	}
 }
 
-func Parser(mx matrix.Service, eth blockchain.Ethereum, database db.Service, callStates map[string]*CallState, bobr *bobrix.Bobrix, grpc *grpcmanager.GRPCClientManager) func(evt *event.Event) *bobrix.AIRequest {
-	return func(evt *event.Event) *bobrix.AIRequest {
-		key := fmt.Sprintf("%s %s", evt.RoomID, evt.Sender)
-
-		callState, callStateFound := callStates[key]
-		if !callStateFound {
-			names, err := parseCommand(evt.Content.AsMessage().Body, evt.RoomID, mx)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-
-			snetService, err := database.GetSnetService(names.SnetID)
-			if err != nil {
-				log.Error().Err(err)
-				_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-			if snetService == nil || snetService.URL == "" {
-				log.Error().Msgf("Service with ID %s not found", names.SnetID)
-				_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-
-			client, err := grpc.GetClient(snetService.URL)
-			if err != nil {
-				log.Error().Err(err)
-				_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-
-			healthClient := grpc_health_v1.NewHealthClient(client.Conn)
-			hReq := grpc_health_v1.HealthCheckRequest{}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			hResp, err := healthClient.Check(ctx, &hReq)
-			if err != nil {
-				log.Error().Err(err).Msgf("failed to get health status: %+v", hResp)
-				_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-
-			if hResp.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
-				log.Debug().Msgf("service is offline: %+v", hResp.GetStatus())
-				return nil
-			}
-			log.Debug().Msgf("service is online: %+v", hResp.GetStatus())
-
-			paymentStateKey := fmt.Sprintf("%s %s %s", evt.RoomID, evt.Sender, evt.Content.AsMessage().Body)
-
-			service, found := bobr.GetService(names.SnetID)
-			if !found {
-				log.Error().Err(errors.New("service not found"))
-				_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-
-			method := service.Service.Methods[names.Method]
-			if method == nil {
-				log.Error().Err(errors.New("method not found"))
-				_, err = mx.SendMessage(evt.RoomID, "Method unavailable.")
-				if err != nil {
-					log.Error().Err(err)
-					return nil
-				}
-				return nil
-			}
-
-			paymentStateUUID := uuid.New()
-			recipientAddress := config.Blockchain.AdminPublicAddress
-
-			tokenAddress, err := eth.MPE.Token(&bind.CallOpts{})
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-			paymentStateURL := fmt.Sprintf("ethereum:%s/transfer?address=%s&uint256=%v",
-				tokenAddress, recipientAddress, snetService.Price)
-
-			paymentState := &db.PaymentState{
-				ID:           paymentStateUUID,
-				URL:          paymentStateURL,
-				Key:          paymentStateKey,
-				TokenAddress: tokenAddress.Hex(),
-				ToAddress:    recipientAddress,
-				Amount:       snetService.Price,
-			}
-			_, err = database.CreatePaymentState(paymentState)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-			paymentGatewayURL := fmt.Sprintf("%s?id=%s", fmt.Sprintf("http://%s", config.App.Domain), paymentStateUUID.String())
-			text := fmt.Sprintf("To continue, pay for the service within %d min:<br>%s", config.App.PaymentTimeout, paymentGatewayURL)
-
-			_, err = mx.SendMessage(evt.RoomID, text)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-
-			err = waitForPayment(evt, paymentStateUUID, mx, eth, database)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-
-			fieldDescription := method.Inputs[0].Description
-			resp, err := mx.SendMessage(evt.RoomID, fieldDescription)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-			callStates[key] = NewCallState(names.SnetID, method, resp.EventID)
-		} else {
-			err := processCallState(evt, mx, callState)
-			if err != nil {
-				log.Error().Err(err)
-				return nil
-			}
-
-			if callStates[key].CurrentInputID >= len(callStates[key].Method.Inputs) {
-				log.Debug().Msgf("full data filled: %v", callStates[key].FilledInputs)
-
-				req := &bobrix.AIRequest{
-					ServiceName: callStates[key].ServiceName,
-					MethodName:  callStates[key].Method.Name,
-					InputParams: callStates[key].FilledInputs,
-				}
-
-				delete(callStates, key)
-
-				return req
-			}
+func Parser(mx matrix.Service, eth blockchain.Ethereum, database db.Service, callStates map[string]*CallState, bobr *bobrix.Bobrix, grpc *grpcmanager.GRPCClientManager) func(evt *event.Event) *bobrix.ServiceRequest {
+	return func(evt *event.Event) *bobrix.ServiceRequest {
+		// Skip if message starts with ! (bot commands)
+		if strings.HasPrefix(strings.TrimSpace(evt.Content.AsMessage().Body), "!") {
+			return nil
 		}
+
+		names, err := parseCommand(evt.Content.AsMessage().Body, evt.RoomID, mx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse command")
+			return nil
+		}
+
+		log.Info().Str("snet_id", names.SnetID).Str("descriptor", names.Descriptor).Str("service", names.Service).Str("method", names.Method).Interface("params", names.Params).Msg("parsed command")
+
+		snetService, err := database.GetSnetService(names.SnetID)
+		if err != nil {
+			log.Error().Err(err).Str("snet_id", names.SnetID).Msg("failed to get service from database")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		if snetService == nil || snetService.URL == "" {
+			log.Error().Str("snet_id", names.SnetID).Msg("service not found in database or URL is empty")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+
+		log.Info().Str("snet_id", names.SnetID).Str("url", snetService.URL).Msg("found service in database")
+
+		log.Info().Str("url", snetService.URL).Msg("attempting to get gRPC client")
+		client, err := grpc.GetClient(snetService.URL)
+		if err != nil {
+			log.Error().Err(err).Str("url", snetService.URL).Msg("failed to get gRPC client")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Str("url", snetService.URL).Msg("successfully got gRPC client")
+
+		log.Info().Str("url", snetService.URL).Msg("checking service health")
+		healthClient := grpc_health_v1.NewHealthClient(client.Conn)
+		hReq := grpc_health_v1.HealthCheckRequest{}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		hResp, err := healthClient.Check(ctx, &hReq)
+		if err != nil {
+			log.Error().Err(err).Str("url", snetService.URL).Msg("failed to get health status")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+
+		log.Info().Str("url", snetService.URL).Str("status", hResp.GetStatus().String()).Msg("health check response")
+		if hResp.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
+			log.Error().Str("url", snetService.URL).Str("status", hResp.GetStatus().String()).Msg("service is offline")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Str("url", snetService.URL).Msg("service is online")
+
+		log.Info().Str("snet_id", names.SnetID).Msg("checking service in bobrix")
+		service, found := bobr.GetService(names.SnetID)
+		if !found {
+			log.Error().Str("snet_id", names.SnetID).Msg("service not found in bobrix")
+			_, err = mx.SendMessage(evt.RoomID, "Service unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Str("snet_id", names.SnetID).Msg("found service in bobrix")
+
+		method := service.Service.Methods[names.Method]
+		if method == nil {
+			log.Error().Err(errors.New("method not found"))
+			_, err = mx.SendMessage(evt.RoomID, "Method unavailable.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+
+		log.Info().
+			Str("snet_id", names.SnetID).
+			Str("method", names.Method).
+			Msg("using new payment system")
+
+		privateKey, err := crypto.HexToECDSA(config.Blockchain.AdminPrivateKey)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse private key")
+			_, err = mx.SendMessage(evt.RoomID, "Internal error.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Msg("private key parsed successfully")
+
+		protoFiles, err := getProtoFilesForService(snetService)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to get proto files")
+			_, err = mx.SendMessage(evt.RoomID, "Internal error.")
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Msg("proto files obtained successfully")
+
+		paymentManager := NewPaymentManager(eth, database, grpc, privateKey, protoFiles)
+		log.Info().Msg("payment manager created successfully")
+
+		log.Info().Msg("calling PaymentManager.ExecuteCall")
+		result, err := paymentManager.ExecuteCall(context.Background(), snetService, names.Method, names.Params)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to execute call")
+			_, err = mx.SendMessage(evt.RoomID, fmt.Sprintf("Error: %v", err))
+			if err != nil {
+				log.Error().Err(err)
+				return nil
+			}
+			return nil
+		}
+		log.Info().Msg("PaymentManager.ExecuteCall completed successfully")
+
+		resultStr := fmt.Sprintf("%v", result)
+		_, err = mx.SendMessage(evt.RoomID, resultStr)
+		if err != nil {
+			log.Error().Err(err)
+			return nil
+		}
+		log.Info().Msg("result sent to Matrix successfully")
 
 		return nil
 	}
@@ -214,19 +219,55 @@ func Parser(mx matrix.Service, eth blockchain.Ethereum, database db.Service, cal
 
 // parseCommand parses the command message and extracts relevant information.
 func parseCommand(msg string, roomID id.RoomID, mx matrix.Service) (ParsedNames, error) {
+	logger := log.With().
+		Str("message", msg).
+		Str("room_id", string(roomID)).
+		Logger()
+
 	isPrivate, err := mx.IsPrivateRoom(roomID)
 	if err != nil {
+		logger.Error().Err(err).Msg("failed to check if room is private")
 		return ParsedNames{}, err
 	}
 
 	trimmed := strings.TrimSpace(msg)
 
-	names := strings.Split(trimmed, " ")
+	// Try to find JSON parameters at the end of the message
+	// Format: "snet_id descriptor service method {json_params}"
+	lastBraceIndex := strings.LastIndex(trimmed, "{")
+	lastClosingBraceIndex := strings.LastIndex(trimmed, "}")
+
+	var params map[string]interface{}
+	var commandPart string
+
+	if lastBraceIndex != -1 && lastClosingBraceIndex != -1 && lastClosingBraceIndex > lastBraceIndex {
+		jsonStr := trimmed[lastBraceIndex : lastClosingBraceIndex+1]
+		commandPart = strings.TrimSpace(trimmed[:lastBraceIndex])
+
+		err := json.Unmarshal([]byte(jsonStr), &params)
+		if err != nil {
+			logger.Error().
+				Err(err).
+				Str("json_params", jsonStr).
+				Msg("failed to parse JSON parameters")
+			return ParsedNames{}, fmt.Errorf("invalid JSON parameters: %w", err)
+		}
+	} else {
+		commandPart = trimmed
+		params = make(map[string]interface{})
+		logger.Debug().Msg("no JSON parameters found in command")
+	}
+
+	names := strings.Split(commandPart, " ")
 
 	privNamesNumber := 4
 	pubNamesNumber := 5
 	if !isPrivate {
 		if len(names) != pubNamesNumber {
+			logger.Error().
+				Int("expected", pubNamesNumber).
+				Int("got", len(names)).
+				Msg("incorrect number of parameters for public room")
 			return ParsedNames{}, fmt.Errorf("incorrect params number. Want 5, got %d", len(names))
 		}
 
@@ -236,6 +277,7 @@ func parseCommand(msg string, roomID id.RoomID, mx matrix.Service) (ParsedNames,
 			Descriptor: names[2],
 			Service:    names[3],
 			Method:     names[4],
+			Params:     params,
 		}, nil
 	}
 
@@ -248,9 +290,60 @@ func parseCommand(msg string, roomID id.RoomID, mx matrix.Service) (ParsedNames,
 		Descriptor: names[1],
 		Service:    names[2],
 		Method:     names[3],
+		Params:     params,
 	}, nil
 }
 
+// getProtoFilesForService retrieves proto files for the service from IPFS
+func getProtoFilesForService(snetService *db.SnetService) (map[string]string, error) {
+	ipfsClient := ipfsutils.Init()
+
+	var protoHashes []string
+
+	if snetService.ServiceApiSource != "" {
+		protoHashes = append(protoHashes, snetService.ServiceApiSource)
+	}
+
+	if snetService.ModelIpfsHash != "" {
+		protoHashes = append(protoHashes, snetService.ModelIpfsHash)
+	}
+
+	if len(protoHashes) == 0 {
+		return nil, fmt.Errorf("both ModelIpfsHash and ServiceApiSource are empty")
+	}
+
+	var content []byte
+	var protoErr error
+
+	for _, protoHash := range protoHashes {
+		log.Info().Str("hash", protoHash).Msg("trying to get proto files from IPFS")
+		content, protoErr = ipfsClient.GetIpfsFile(protoHash)
+		if protoErr == nil {
+			log.Info().Str("successful_hash", protoHash).Msg("successfully got proto files from IPFS")
+			break
+		}
+		log.Error().Err(protoErr).Str("hash", protoHash).Msg("failed to get proto files from IPFS, trying next hash")
+	}
+
+	if protoErr != nil {
+		return nil, fmt.Errorf("failed to get proto files from all IPFS hashes: %w", protoErr)
+	}
+
+	protoFiles, err := ipfsutils.ReadFilesCompressed(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read compressed proto files: %w", err)
+	}
+
+	protoFilesMap := make(map[string]string)
+	for fileName, fileContent := range protoFiles {
+		protoFilesMap[fileName] = string(fileContent)
+	}
+
+	log.Info().Int("files_count", len(protoFilesMap)).Msg("extracted proto files count")
+	return protoFilesMap, nil
+}
+
+// Deprecated: waitForPayment waits for payment confirmation.
 func waitForPayment(event *event.Event, paymentID uuid.UUID, mx matrix.Service, eth blockchain.Ethereum, database db.Service) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -309,6 +402,7 @@ func waitForPayment(event *event.Event, paymentID uuid.UUID, mx matrix.Service, 
 	}
 }
 
+// Deprecated: processCallState processes the call state for sequential input filling.
 func processCallState(event *event.Event, mx matrix.Service, callState *CallState) error {
 	repliedEvt, err := mx.GetRepliedEvent(event)
 	if err != nil {
@@ -337,8 +431,15 @@ func processCallState(event *event.Event, mx matrix.Service, callState *CallStat
 		return nil
 	}
 
-	text := callState.Method.Inputs[callState.CurrentInputID].Description
-	resp, err := mx.SendMessage(event.RoomID, text)
+	textMap := callState.Method.Inputs[callState.CurrentInputID].Description
+	nextText := textMap["en"]
+	if nextText == "" {
+		for _, v := range textMap {
+			nextText = v
+			break
+		}
+	}
+	resp, err := mx.SendMessage(event.RoomID, nextText)
 	if err != nil {
 		return err
 	}
@@ -346,4 +447,14 @@ func processCallState(event *event.Event, mx matrix.Service, callState *CallStat
 	callState.LastEventID = resp.EventID
 
 	return nil
+}
+
+// Deprecated: getPrivateKey retrieves the private key from configuration
+func getPrivateKey() *ecdsa.PrivateKey {
+	privateKeyECDSA, err := crypto.HexToECDSA(config.Blockchain.AdminPrivateKey)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to parse private key")
+		return nil
+	}
+	return privateKeyECDSA
 }
