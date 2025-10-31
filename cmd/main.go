@@ -11,8 +11,8 @@ import (
 	"github.com/tensved/bobrix"
 	"github.com/tensved/bobrix/mxbot"
 	"github.com/tensved/snet-matrix-framework/internal/app"
-	"github.com/tensved/snet-matrix-framework/internal/config"
-	"github.com/tensved/snet-matrix-framework/internal/snet"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
+	"github.com/tensved/snet-matrix-framework/pkg/snet"
 )
 
 func main() {

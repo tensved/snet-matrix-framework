@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
-	"github.com/tensved/snet-matrix-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 )
 
 // postgres wraps the pgxpool.Pool to provide additional methods.
@@ -196,7 +196,7 @@ func (p *postgres) CreateSnetService(s SnetService) (int, error) {
 	var id int
 	err := row.Scan(&id)
 	if err != nil {
-		return 0, errors.New("failed to add snet-service")
+		return 0, fmt.Errorf("failed to add snet-service: %w", err)
 	}
 	return id, nil
 }

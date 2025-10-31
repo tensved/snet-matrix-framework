@@ -35,3 +35,5 @@ certbot
 frontend/.env.local
 
 main
+.env
+.DS_Store

@@ -15,7 +15,7 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/kubo/client/rpc"
 	"github.com/rs/zerolog/log"
-	"github.com/tensved/snet-matrix-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 )
 
 // IPFSClient wraps the IPFS HTTP API client.

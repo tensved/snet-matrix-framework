@@ -58,6 +58,10 @@ func (s *SnetSyncer) SyncOnce() {
 	for i, orgIDBytes := range orgs {
 		orgIDStr := strings.ReplaceAll(string(orgIDBytes[:]), "\u0000", "")
 
+		if orgIDStr != "nim-test" && orgIDStr != "NIM" {
+			continue
+		}
+
 		logger.Info().
 			Int("org_index", i).
 			Str("org_id", orgIDStr).
@@ -317,10 +321,6 @@ func (s *SnetSyncer) SyncOnce() {
 				Str("snet_id", srvMeta.SnetID).
 				Int("content_size", len(content)).
 				Msg("received content from IPFS")
-			logger.Info().
-				Str("snet_id", srvMeta.SnetID).
-				Str("full_content", string(content)).
-				Msg("FULL IPFS CONTENT")
 
 			protoFiles, err := ipfs.ReadFilesCompressed(string(content))
 			if err != nil {

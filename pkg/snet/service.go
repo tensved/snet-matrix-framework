@@ -22,11 +22,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/bobrix/contracts"
 
-	"github.com/tensved/snet-matrix-framework/internal/config"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain/util"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
 
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -49,7 +49,7 @@ type Handler struct {
 
 const (
 	prefixGetChannelState = "__get_channel_state"
-	paymentChannelTimeout = time.Minute * 1
+	paymentChannelTimeout = time.Minute * 3
 )
 
 // Deprecated: MultiPartyEscrowChannel represents a multi-party escrow channel.
@@ -767,14 +767,28 @@ func (h *Handler) getLastBlockNumber() *big.Int {
 
 // Deprecated: waitForTransaction waits for transaction confirmation.
 func waitForTransaction(client *ethclient.Client, tx *types.Transaction) (*types.Receipt, error) {
-	ctx := context.Background()
+	// Hard timeout (deprecated path too) to avoid infinite polling
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
 	txHash := tx.Hash()
+
+	// Exponential backoff: 1s, 2s, 4s, 8s (cap)
+	backoff := 1 * time.Second
+	const maxBackoff = 8 * time.Second
 
 	for {
 		receipt, err := client.TransactionReceipt(ctx, txHash)
 		if errors.Is(err, ethereum.NotFound) {
-			time.Sleep(1 * time.Second)
-			continue
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("transaction receipt wait timeout: %w", ctx.Err())
+			case <-time.After(backoff):
+				if backoff < maxBackoff {
+					backoff *= 2
+				}
+				continue
+			}
 		} else if err != nil {
 			return nil, err
 		}

@@ -17,11 +17,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tensved/bobrix"
 	"github.com/tensved/bobrix/contracts"
-	"github.com/tensved/snet-matrix-framework/internal/config"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/internal/matrix"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
 	ipfsutils "github.com/tensved/snet-matrix-framework/pkg/ipfs"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"maunium.net/go/mautrix/event"
@@ -205,7 +205,16 @@ func Parser(mx matrix.Service, eth blockchain.Ethereum, database db.Service, cal
 		}
 		log.Info().Msg("PaymentManager.ExecuteCall completed successfully")
 
-		resultStr := fmt.Sprintf("%v", result)
+		// Extract response content and format nicely
+		var response interface{} = result
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if resp, exists := resultMap["response"]; exists {
+				response = resp
+			}
+		}
+
+		// Format response as readable string
+		resultStr := formatValue(response)
 		_, err = mx.SendMessage(evt.RoomID, resultStr)
 		if err != nil {
 			log.Error().Err(err)
@@ -234,23 +243,51 @@ func parseCommand(msg string, roomID id.RoomID, mx matrix.Service) (ParsedNames,
 
 	// Try to find JSON parameters at the end of the message
 	// Format: "snet_id descriptor service method {json_params}"
-	lastBraceIndex := strings.LastIndex(trimmed, "{")
-	lastClosingBraceIndex := strings.LastIndex(trimmed, "}")
+	// Need to find the matching closing brace for the first opening brace
+	firstBraceIndex := strings.Index(trimmed, "{")
 
 	var params map[string]interface{}
 	var commandPart string
 
-	if lastBraceIndex != -1 && lastClosingBraceIndex != -1 && lastClosingBraceIndex > lastBraceIndex {
-		jsonStr := trimmed[lastBraceIndex : lastClosingBraceIndex+1]
-		commandPart = strings.TrimSpace(trimmed[:lastBraceIndex])
+	if firstBraceIndex != -1 {
+		// Find the matching closing brace
+		braceCount := 0
+		lastClosingBraceIndex := -1
 
-		err := json.Unmarshal([]byte(jsonStr), &params)
-		if err != nil {
-			logger.Error().
-				Err(err).
-				Str("json_params", jsonStr).
-				Msg("failed to parse JSON parameters")
-			return ParsedNames{}, fmt.Errorf("invalid JSON parameters: %w", err)
+		for i := firstBraceIndex; i < len(trimmed); i++ {
+			if trimmed[i] == '{' {
+				braceCount++
+			} else if trimmed[i] == '}' {
+				braceCount--
+				if braceCount == 0 {
+					lastClosingBraceIndex = i
+					break
+				}
+			}
+		}
+
+		if lastClosingBraceIndex != -1 {
+			jsonStr := trimmed[firstBraceIndex : lastClosingBraceIndex+1]
+			commandPart = strings.TrimSpace(trimmed[:firstBraceIndex])
+
+			err := json.Unmarshal([]byte(jsonStr), &params)
+			if err != nil {
+				logger.Error().
+					Err(err).
+					Str("json_params", jsonStr).
+					Msg("failed to parse JSON parameters")
+				return ParsedNames{}, fmt.Errorf("invalid JSON parameters: %w", err)
+			}
+
+			// Debug: Log the parsed parameters
+			logger.Debug().
+				Interface("parsed_params", params).
+				Str("json_str", jsonStr).
+				Msg("successfully parsed JSON parameters")
+		} else {
+			commandPart = trimmed
+			params = make(map[string]interface{})
+			logger.Debug().Msg("no matching closing brace found for JSON parameters")
 		}
 	} else {
 		commandPart = trimmed
@@ -259,7 +296,7 @@ func parseCommand(msg string, roomID id.RoomID, mx matrix.Service) (ParsedNames,
 	}
 
 	names := strings.Split(commandPart, " ")
-
+	logger.Debug().Str("names", strings.Join(names, " ")).Msg("names")
 	privNamesNumber := 4
 	pubNamesNumber := 5
 	if !isPrivate {
@@ -457,4 +494,32 @@ func getPrivateKey() *ecdsa.PrivateKey {
 		return nil
 	}
 	return privateKeyECDSA
+}
+
+// formatValue formats individual values recursively
+func formatValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		var result strings.Builder
+		for key, val := range v {
+			if result.Len() > 0 {
+				result.WriteString("<br>")
+			}
+			result.WriteString(fmt.Sprintf("%s: %s", key, formatValue(val)))
+		}
+		return result.String()
+	case []interface{}:
+		var result strings.Builder
+		for i, item := range v {
+			if result.Len() > 0 {
+				result.WriteString("<br>")
+			}
+			result.WriteString(fmt.Sprintf("%d. %s", i+1, formatValue(item)))
+		}
+		return result.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }

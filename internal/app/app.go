@@ -4,15 +4,15 @@ import (
 	"regexp"
 
 	"github.com/rs/zerolog/log"
-	"github.com/tensved/snet-matrix-framework/internal/config"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/internal/logger"
 	"github.com/tensved/snet-matrix-framework/internal/matrix"
 	"github.com/tensved/snet-matrix-framework/internal/server"
-	"github.com/tensved/snet-matrix-framework/internal/syncer"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
 	ipfs "github.com/tensved/snet-matrix-framework/pkg/ipfs"
+	"github.com/tensved/snet-matrix-framework/pkg/syncer"
 )
 
 type App struct {

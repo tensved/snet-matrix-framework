@@ -48,6 +48,7 @@ type BlockchainConfig struct {
 	EthProviderURL     string `env:"ETH_PROVIDER_URL"`     // The URL of the Ethereum provider.
 	EthProviderWSURL   string `env:"ETH_PROVIDER_WS_URL"`  // The WebSocket URL of the Ethereum provider.
 	ChainID            string `env:"CHAIN_ID"`             // The chain ID of the blockchain network.
+	TestAlchemy        bool   `env:"TEST_ALCHEMY"`         // The flag to enable test Alchemy.
 }
 
 // MatrixConfig holds the configuration values for connecting to a Matrix homeserver.

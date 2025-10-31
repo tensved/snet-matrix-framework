@@ -5,11 +5,11 @@ import (
 	"github.com/tensved/bobrix"
 	"github.com/tensved/bobrix/contracts"
 	"github.com/tensved/bobrix/mxbot"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/internal/matrix"
-	"github.com/tensved/snet-matrix-framework/internal/syncer"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
+	"github.com/tensved/snet-matrix-framework/pkg/syncer"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 

@@ -16,8 +16,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
-	"github.com/tensved/snet-matrix-framework/internal/config"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 )
 
 // Deprecated: EstimateGas returns a new bind.TransactOpts instance with zero gas limit
@@ -173,8 +173,15 @@ func GetWatchOpts(lastBlockNumber *big.Int) *bind.WatchOpts {
 }
 
 func GetFilterOpts(lastBlockNumber *big.Int) *bind.FilterOpts {
-	start := uint64(0)
+	var start uint64
 	end := lastBlockNumber.Uint64()
+	// TODO this logic only for Alchemy Free tier max 5 blocks, remove this for production
+	if config.Blockchain.TestAlchemy && end > 10 {
+		start = end - 10
+	} else if end > 50000 {
+		start = end - 50000
+	}
+
 	return &bind.FilterOpts{
 		Start:   start,
 		End:     &end,
@@ -188,6 +195,48 @@ func GetTransactOpts(privateKeyECDSA *ecdsa.PrivateKey) *bind.TransactOpts {
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create transactor")
 	}
+
+	// =============================================================================
+	// GAS CONFIGURATION FOR MPE OPERATIONS
+	// =============================================================================
+
+	// Gas Limit: Maximum computational units for this transaction
+	// - 300,000 is standard for MPE (Multi-Party Escrow) operations
+	// - If operation needs more gas -> transaction fails
+	// - If operation needs less gas -> unused gas is refunded
+	opts.GasLimit = uint64(300000)
+
+	// =============================================================================
+	// EIP-1559 GAS PRICING (replaces simple GasPrice)
+	// =============================================================================
+
+	// GasFeeCap: Maximum price we're willing to pay per gas unit
+	// - 350000000 wei = 0.35 gwei
+	// - This is our HARD LIMIT - we never pay more than this
+	// - If Base Fee > GasFeeCap -> transaction will be rejected
+	// - LOW priority level from MetaMask Gas API (slow but cheap)
+	opts.GasFeeCap = big.NewInt(350000000)
+
+	// GasTipCap: Priority fee (tip) for miners
+	// - 100000 wei = 0.0001 gwei
+	// - Motivates miners to include our transaction in block
+	// - Higher tip = faster confirmation, lower tip = slower confirmation
+	// - LOW priority level from MetaMask Gas API
+	opts.GasTipCap = big.NewInt(100000)
+
+	// =============================================================================
+	// COST CALCULATION
+	// =============================================================================
+	// Final cost = Gas Limit × min(GasFeeCap, Base Fee + GasTipCap)
+	//
+	// Example with current settings:
+	// - If Base Fee = 0.2 gwei: cost = 300k × 0.2001 gwei
+	// - If Base Fee = 0.3 gwei: cost = 300k × 0.3001 gwei
+	// - Maximum possible cost = 300k × 0.35 gwei = 0.000105 ETH
+	// =============================================================================
+
+	// Don't set GasPrice when using EIP-1559 - it causes conflict
+
 	return opts
 }
 

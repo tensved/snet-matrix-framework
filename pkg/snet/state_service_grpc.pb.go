@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.3
-// source: internal/snet/state_service.proto
+// source: state_service.proto
 
 package snet
 
@@ -136,7 +136,7 @@ var PaymentChannelStateService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/snet/state_service.proto",
+	Metadata: "state_service.proto",
 }
 
 const (
@@ -280,5 +280,5 @@ var FreeCallStateService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "internal/snet/state_service.proto",
+	Metadata: "state_service.proto",
 }

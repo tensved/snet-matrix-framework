@@ -81,11 +81,25 @@ func NewGRPCService(serviceURL string) (*GRPCService, error) {
 		logger.Error().Err(err).Msg("failed to parse service URL")
 		return nil, err
 	}
-	if parsedURL.Hostname() == "" || parsedURL.Port() == "" {
+	if parsedURL.Hostname() == "" {
 		logger.Error().Msg("invalid service URL format")
 		return nil, fmt.Errorf("invalid service URL: %s", serviceURL)
 	}
-	target := parsedURL.Hostname() + ":" + parsedURL.Port()
+
+	// Use default ports for common schemes if not specified
+	port := parsedURL.Port()
+	if port == "" {
+		switch parsedURL.Scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		default:
+			logger.Error().Msg("invalid service URL format - no port specified")
+			return nil, fmt.Errorf("invalid service URL: %s", serviceURL)
+		}
+	}
+	target := parsedURL.Hostname() + ":" + port
 
 	logger.Debug().
 		Str("target", target).

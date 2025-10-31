@@ -8,16 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog/log"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain/util"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -214,6 +215,12 @@ func NewPaymentChannelHandler(evm blockchain.Ethereum, grpc *grpcmanager.GRPCCli
 		return nil, fmt.Errorf("failed to ensure channel validity: %w", err)
 	}
 
+	// Update block number after channel changes to get fresh signature
+	currentBlockNumber, err = evm.Client.BlockNumber(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get updated block number: %w", err)
+	}
+
 	channelState, err := GetChannelInfoFromService(grpc, context.Background(), serviceMetadata.URL, mpeAddress, channelID, currentBlockNumber, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get final channel state: %w", err)
@@ -287,14 +294,33 @@ func (h *PaymentChannelHandler) UpdateTokenState(ctx context.Context) error {
 		ClaimSignature: claimSignature,
 	}
 
-	tokenReply, err := h.tokenClient.GetToken(ctx, &request)
-	if err != nil {
-		return fmt.Errorf("failed to get token: %w", err)
+	// Retry logic for handling "transaction in progress"
+	var tokenReply *TokenReply
+	for attempt := 1; attempt <= 3; attempt++ {
+		tokenReply, err = h.tokenClient.GetToken(ctx, &request)
+		if err == nil {
+			break
+		}
+
+		// Check if error is "transaction in progress"
+		if strings.Contains(err.Error(), "another transaction on channel") {
+			logger.Warn().
+				Int("attempt", attempt).
+				Str("channel_id", h.channelID.String()).
+				Msg("transaction in progress, waiting and retrying")
+
+			if attempt < 3 {
+				time.Sleep(time.Duration(attempt) * 5 * time.Second) // 5s, 10s, 15s
+				continue
+			}
+		}
+
+		// If not "transaction in progress" or attempts exhausted
+		return fmt.Errorf("failed to get token (attempt %d): %w", attempt, err)
 	}
 
 	h.Token = tokenReply.GetToken()
 	logger.Debug().
-		Str("token", h.Token).
 		Uint64("channel_id", tokenReply.GetChannelId()).
 		Uint64("planned_amount", tokenReply.GetPlannedAmount()).
 		Uint64("used_amount", tokenReply.GetUsedAmount()).

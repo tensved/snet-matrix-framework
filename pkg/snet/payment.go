@@ -16,11 +16,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/rs/zerolog/log"
-	"github.com/tensved/snet-matrix-framework/internal/grpcmanager"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain"
 	"github.com/tensved/snet-matrix-framework/pkg/blockchain/util"
 	"github.com/tensved/snet-matrix-framework/pkg/db"
+	"github.com/tensved/snet-matrix-framework/pkg/grpcmanager"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
@@ -159,26 +160,52 @@ func (pm *PaymentManager) callService(ctx context.Context, snetService *db.SnetS
 	in := dynamicpb.NewMessage(methodDesc.Input())
 	out := dynamicpb.NewMessage(methodDesc.Output())
 
+	logger.Debug().
+		Str("input_type", string(methodDesc.Input().FullName())).
+		Str("output_type", string(methodDesc.Output().FullName())).
+		Msg("created protobuf messages")
+
 	err = protojson.UnmarshalOptions{
 		AllowPartial:   true,
 		DiscardUnknown: true,
 	}.Unmarshal(inputJSON, in)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to unmarshal input to protobuf")
+		logger.Error().
+			Err(err).
+			Str("input_json", string(inputJSON)).
+			Str("input_type", string(methodDesc.Input().FullName())).
+			Msg("failed to unmarshal input to protobuf")
 		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
 	}
+
+	// Log the protobuf message content
+	inBytes, _ := protojson.Marshal(in)
+	logger.Debug().
+		Str("protobuf_message", string(inBytes)).
+		Msg("protobuf message created from JSON")
 
 	fullMethodName := "/" + string(fileDesc.Package()) + "." + string(methodDesc.Parent().Name()) + "/" + methodName
 
 	logger.Debug().
 		Str("method", fullMethodName).
+		Str("service_url", snetService.URL).
 		Msg("executing gRPC call")
 
 	err = grpcClient.Conn.Invoke(ctxWithMetadata, fullMethodName, in, out)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to invoke gRPC method")
+		logger.Error().
+			Err(err).
+			Str("method", fullMethodName).
+			Str("service_url", snetService.URL).
+			Msg("failed to invoke gRPC method")
 		return nil, fmt.Errorf("failed to invoke gRPC method: %w", err)
 	}
+
+	// Log the protobuf response
+	outBytes, _ := protojson.Marshal(out)
+	logger.Debug().
+		Str("protobuf_response", string(outBytes)).
+		Msg("received protobuf response from daemon")
 
 	jsonBytes, err := protojson.MarshalOptions{
 		EmitUnpopulated: true,
@@ -188,6 +215,10 @@ func (pm *PaymentManager) callService(ctx context.Context, snetService *db.SnetS
 		logger.Error().Err(err).Msg("failed to marshal response")
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
+
+	logger.Debug().
+		Str("json_response", string(jsonBytes)).
+		Msg("converted protobuf response to JSON")
 
 	var responseData map[string]interface{}
 	if err := json.Unmarshal(jsonBytes, &responseData); err != nil {
@@ -268,4 +299,102 @@ func GetChannelInfoFromService(grpcManager *grpcmanager.GRPCClientManager, ctx c
 	}
 
 	return stateReply, nil
+}
+
+// ExecuteProtobufCall executes a service call with protobuf message directly
+func (pm *PaymentManager) ExecuteProtobufCall(ctx context.Context, snetService *db.SnetService, methodName string, inputMessage proto.Message) (proto.Message, error) {
+	logger := log.With().
+		Str("service_id", snetService.SnetID).
+		Str("method", methodName).
+		Logger()
+
+	logger.Info().Msg("executing protobuf service call")
+
+	strategy, err := pm.GetStrategy(snetService)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get payment strategy")
+		return nil, fmt.Errorf("failed to get strategy: %w", err)
+	}
+
+	err = strategy.UpdateTokenState(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to update payment handler token state")
+		return nil, fmt.Errorf("failed to update strategy token state: %w", err)
+	}
+
+	result, err := pm.callProtobufService(ctx, snetService, methodName, inputMessage, strategy)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to call protobuf service")
+		return nil, fmt.Errorf("failed to call service: %w", err)
+	}
+
+	logger.Info().Msg("protobuf service call completed successfully")
+	return result, nil
+}
+
+// callProtobufService calls the service with protobuf message directly
+func (pm *PaymentManager) callProtobufService(ctx context.Context, snetService *db.SnetService, methodName string, inputMessage proto.Message, strategy Strategy) (proto.Message, error) {
+	logger := log.With().
+		Str("service_id", snetService.SnetID).
+		Str("method", methodName).
+		Logger()
+
+	logger.Debug().Msg("preparing protobuf gRPC call")
+
+	grpcClient, err := pm.grpcManager.GetClient(snetService.URL)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get gRPC client")
+		return nil, fmt.Errorf("failed to get gRPC client: %w", err)
+	}
+
+	ctxWithMetadata := strategy.BuildRequestMetadata(ctx)
+	if ctxWithMetadata == nil {
+		logger.Error().Msg("failed to get gRPC metadata")
+		return nil, fmt.Errorf("failed to get gRPC metadata")
+	}
+
+	protoFiles, err := pm.getProtoDescriptors()
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get proto descriptors")
+		return nil, fmt.Errorf("failed to get proto descriptors: %w", err)
+	}
+
+	fileDesc, methodDesc, err := pm.findMethod(protoFiles, methodName)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to find gRPC method")
+		return nil, fmt.Errorf("failed to find method: %w", err)
+	}
+
+	// Create output message
+	out := dynamicpb.NewMessage(methodDesc.Output())
+
+	logger.Debug().
+		Str("input_type", string(methodDesc.Input().FullName())).
+		Str("output_type", string(methodDesc.Output().FullName())).
+		Msg("created protobuf output message")
+
+	fullMethodName := "/" + string(fileDesc.Package()) + "." + string(methodDesc.Parent().Name()) + "/" + methodName
+
+	logger.Debug().
+		Str("method", fullMethodName).
+		Str("service_url", snetService.URL).
+		Msg("executing protobuf gRPC call")
+
+	err = grpcClient.Conn.Invoke(ctxWithMetadata, fullMethodName, inputMessage, out)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Str("method", fullMethodName).
+			Str("service_url", snetService.URL).
+			Msg("gRPC call failed")
+		return nil, fmt.Errorf("gRPC call failed: %w", err)
+	}
+
+	// Log the response
+	outBytes, _ := protojson.Marshal(out)
+	logger.Debug().
+		Str("response", string(outBytes)).
+		Msg("received protobuf response")
+
+	return out, nil
 }

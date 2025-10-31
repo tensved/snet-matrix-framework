@@ -8,16 +8,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rs/zerolog/log"
 
 	contracts "github.com/singnet/snet-ecosystem-contracts"
-	"github.com/tensved/snet-matrix-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 )
 
 var (
@@ -323,7 +327,119 @@ func GetTransactOpts(chainID *big.Int, privateKey *ecdsa.PrivateKey) (*bind.Tran
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transactor: %w", err)
 	}
+
+	// =============================================================================
+	// GAS CONFIGURATION FOR MPE OPERATIONS
+	// =============================================================================
+
+	// Gas Limit: Maximum computational units for this transaction
+	// - 300,000 is standard for MPE (Multi-Party Escrow) operations
+	// - If operation needs more gas -> transaction fails
+	// - If operation needs less gas -> unused gas is refunded
+	auth.GasLimit = uint64(300000)
+
+	// =============================================================================
+	// EIP-1559 GAS PRICING (replaces simple GasPrice)
+	// =============================================================================
+
+	// GasFeeCap: Maximum price we're willing to pay per gas unit
+	// - 350000000 wei = 0.35 gwei
+	// - This is our HARD LIMIT - we never pay more than this
+	// - If Base Fee > GasFeeCap -> transaction will be rejected
+	// - LOW priority level from MetaMask Gas API (slow but cheap)
+	auth.GasFeeCap = big.NewInt(350000000)
+
+	// GasTipCap: Priority fee (tip) for miners
+	// - 100000 wei = 0.0001 gwei
+	// - Motivates miners to include our transaction in block
+	// - Higher tip = faster confirmation, lower tip = slower confirmation
+	// - LOW priority level from MetaMask Gas API
+	auth.GasTipCap = big.NewInt(100000)
+
+	// =============================================================================
+	// COST CALCULATION
+	// =============================================================================
+	// Final cost = Gas Limit × min(GasFeeCap, Base Fee + GasTipCap)
+	//
+	// Example with current settings:
+	// - If Base Fee = 0.2 gwei: cost = 300k × 0.2001 gwei = 0.00006003 ETH = $0.24
+	// - If Base Fee = 0.3 gwei: cost = 300k × 0.25 gwei = 0.000075 ETH = $0.30
+	// - Maximum possible cost = 300k × 0.25 gwei = 0.000075 ETH = $0.30
+	// =============================================================================
+
+	// Don't set GasPrice when using EIP-1559 - it causes conflict
+
 	return auth, nil
+}
+
+// waitForTransaction waits for transaction confirmation
+func waitForTransaction(client *ethclient.Client, tx *types.Transaction) (*types.Receipt, error) {
+	// Hard timeout to avoid infinite polling
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	txHash := tx.Hash()
+
+	// Exponential backoff: 1s, 2s, 4s, 8s, 8s, ... (capped)
+	backoff := 1 * time.Second
+	const maxBackoff = 8 * time.Second
+
+	for {
+		receipt, err := client.TransactionReceipt(ctx, txHash)
+		if err != nil && err == ethereum.NotFound {
+			// Not mined yet; wait with backoff or until timeout
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("transaction receipt wait timeout: %w", ctx.Err())
+			case <-time.After(backoff):
+				if backoff < maxBackoff {
+					backoff *= 2
+				}
+				continue
+			}
+		} else if err != nil {
+			return nil, err
+		}
+
+		return receipt, nil
+	}
+}
+
+// approveTokens approves MPE contract to spend the specified amount of tokens
+func (eth Ethereum) approveTokens(amount *big.Int, transactOpts *bind.TransactOpts) error {
+	log.Info().Str("amount", amount.String()).Msg("Approving tokens for MPE")
+
+	// Get token contract address
+	tokenAddress, err := eth.MPE.Token(&bind.CallOpts{})
+	if err != nil {
+		return fmt.Errorf("failed to get token address: %w", err)
+	}
+
+	// Create token contract instance
+	tokenABI := `[{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"}]`
+	parsedABI, err := abi.JSON(strings.NewReader(tokenABI))
+	if err != nil {
+		return fmt.Errorf("failed to parse token ABI: %w", err)
+	}
+
+	tokenContract := bind.NewBoundContract(tokenAddress, parsedABI, eth.Client, eth.Client, eth.Client)
+
+	// Make approve transaction
+	approveTx, err := tokenContract.Transact(transactOpts, "approve", eth.MPEAddress, amount)
+	if err != nil {
+		return fmt.Errorf("failed to approve tokens: %w", err)
+	}
+
+	log.Info().Str("approveTxHash", approveTx.Hash().Hex()).Msg("Approve transaction sent")
+
+	// Wait for approve transaction to be mined
+	_, err = waitForTransaction(eth.Client, approveTx)
+	if err != nil {
+		return fmt.Errorf("failed to wait for approve transaction: %w", err)
+	}
+
+	log.Info().Msg("Approve transaction confirmed")
+	return nil
 }
 
 // GetCallOpts creates call options for blockchain operations.
@@ -446,6 +562,11 @@ func (eth Ethereum) EnsureChannelValidity(opened *MultiPartyEscrowChannelOpen, c
 				Str("missing_amount", missing.String()).
 				Msg("depositing to MPE")
 
+			// Approve tokens before deposit
+			if err := eth.approveTokens(missing, estimateGas(opts.Transact)); err != nil {
+				return nil, fmt.Errorf("failed to approve tokens for deposit: %w", err)
+			}
+
 			go eth.watchDepositFunds(opts.Watch, chans.DepositFunds, chans.Err, []common.Address{opened.Sender})
 
 			tx, err := eth.MPE.Deposit(estimateGas(opts.Transact), missing)
@@ -458,7 +579,7 @@ func (eth Ethereum) EnsureChannelValidity(opened *MultiPartyEscrowChannelOpen, c
 				Str("amount", missing.String()).
 				Msg("MPE deposit transaction sent")
 
-			deposited := waitingToDepositToMPE(chans.DepositFunds, chans.Err, 30*time.Second)
+			deposited := waitingToDepositToMPE(chans.DepositFunds, chans.Err, 2*time.Minute)
 			if !deposited {
 
 				return nil, fmt.Errorf("deposit to MPE timeout")
@@ -469,6 +590,11 @@ func (eth Ethereum) EnsureChannelValidity(opened *MultiPartyEscrowChannelOpen, c
 		logger.Info().
 			Str("amount", missing.String()).
 			Msg("adding funds to payment channel")
+
+		// Approve tokens before channel add funds
+		if err := eth.approveTokens(missing, estimateGas(opts.Transact)); err != nil {
+			return nil, fmt.Errorf("failed to approve tokens for channel add funds: %w", err)
+		}
 
 		go eth.watchChannelAddFunds(opts.Watch, chans.ChannelAddFunds, chans.Err, []*big.Int{opened.ChannelId})
 
@@ -482,7 +608,7 @@ func (eth Ethereum) EnsureChannelValidity(opened *MultiPartyEscrowChannelOpen, c
 			Str("amount", missing.String()).
 			Msg("channel add funds transaction sent")
 
-		addedFundsID := waitingForChannelFundsToBeAdded(chans.ChannelAddFunds, chans.Err, 30*time.Second)
+		addedFundsID := waitingForChannelFundsToBeAdded(chans.ChannelAddFunds, chans.Err, 2*time.Minute)
 		if addedFundsID == nil {
 
 			return nil, fmt.Errorf("add funds timeout")
@@ -509,7 +635,7 @@ func (eth Ethereum) EnsureChannelValidity(opened *MultiPartyEscrowChannelOpen, c
 			Str("new_expiration", newExpiration.String()).
 			Msg("channel extend transaction sent")
 
-		extendedID := waitingForChannelToExtend(chans.ChannelExtends, chans.Err, 30*time.Second)
+		extendedID := waitingForChannelToExtend(chans.ChannelExtends, chans.Err, 2*time.Minute)
 		if extendedID == nil {
 
 			return nil, fmt.Errorf("channel extend timeout")
@@ -557,7 +683,8 @@ func (eth Ethereum) OpenNewChannel(price, desiredExpiration *big.Int, opts *Bind
 			return nil, fmt.Errorf("failed to open channel: %w", err)
 		}
 
-		id := waitingForChannelToOpen(chans.ChannelOpens, chans.Err, 30*time.Second)
+		// TODO find optimal timeout
+		id := waitingForChannelToOpen(chans.ChannelOpens, chans.Err, 5*time.Minute)
 		if id == nil {
 			return nil, fmt.Errorf("channel open timeout")
 		}
@@ -571,6 +698,11 @@ func (eth Ethereum) OpenNewChannel(price, desiredExpiration *big.Int, opts *Bind
 
 	log.Info().Msg("OpenNewChannel: insufficient balance, depositing and opening channel")
 
+	// Approve tokens before deposit and open channel
+	if err := eth.approveTokens(price, estimateGas(opts.Transact)); err != nil {
+		return nil, fmt.Errorf("failed to approve tokens for deposit and open channel: %w", err)
+	}
+
 	go eth.watchChannelOpen(opts.Watch, chans.ChannelOpens, chans.Err, senders, recipients, groupIDs)
 	go eth.watchDepositFunds(opts.Watch, chans.DepositFunds, chans.Err, senders)
 
@@ -582,12 +714,23 @@ func (eth Ethereum) OpenNewChannel(price, desiredExpiration *big.Int, opts *Bind
 
 	log.Info().Str("txHash", tx.Hash().Hex()).Msg("OpenNewChannel: transaction sent")
 
-	id := waitingForChannelToOpen(chans.ChannelOpens, chans.Err, 30*time.Second)
+	// Wait for transaction to be mined and check status
+	receipt, err := waitForTransaction(eth.Client, tx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for transaction: %w", err)
+	}
+
+	// Check if transaction failed
+	if receipt.Status == 0 {
+		return nil, fmt.Errorf("transaction failed with status 0x0")
+	}
+
+	id := waitingForChannelToOpen(chans.ChannelOpens, chans.Err, 2*time.Minute)
 	if id == nil {
 		return nil, fmt.Errorf("channel open timeout")
 	}
 
-	deposited := waitingToDepositToMPE(chans.DepositFunds, chans.Err, 30*time.Second)
+	deposited := waitingToDepositToMPE(chans.DepositFunds, chans.Err, 2*time.Minute)
 	if !deposited {
 		return nil, fmt.Errorf("deposit timeout")
 	}

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package escrow;
 
-option go_package = "github.com/tensved/snet-matrix-framework/internal/snet;snet";
+option go_package = "github.com/tensved/snet-matrix-framework/pkg/snet;snet";
 
 // PaymentChannelStateService contains methods to get the MultiPartyEscrow
 // payment channel state.

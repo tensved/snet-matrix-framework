@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/tensved/snet-matrix-framework/internal/config"
+	"github.com/tensved/snet-matrix-framework/pkg/config"
 )
 
 // RegisterFiberRoutes sets up the Fiber routes and middleware for the server.
